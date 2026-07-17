@@ -114,6 +114,8 @@ class RoomMembership(db.Model):
     room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     role = db.Column(db.Enum(RoomRole, name="room_role"), nullable=False)
+
+    active_character_id = db.Column(db.Integer, db.ForeignKey("characters.id"), nullable=True)
     joined_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
 
     room = db.relationship("Room", back_populates="memberships")
@@ -134,7 +136,6 @@ class Character(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False)
     avatar_url = db.Column(db.String(500), nullable=True)
     sheet_data = db.Column(db.JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
@@ -143,7 +144,6 @@ class Character(db.Model):
     )
 
     owner = db.relationship("User", back_populates="characters")
-    room = db.relationship("Room", back_populates="characters")
     tokens = db.relationship("Token", back_populates="character")
 
     def __repr__(self):
@@ -199,29 +199,44 @@ class BattleMap(db.Model):
 
 
 class Token(db.Model):
-    """Токен на боевой карте. Позиция хранится в клетках сетки (не в
-    пикселях) — так проще считать дальность заклинаний и снаппинг к сетке
-    делается на фронтенде простым умножением на grid_size."""
-
+    """Любое изображение на боевой карте: токен персонажа, монстр без
+    листа, фон карты или произвольный декоративный пропс (как в Owlbear).
+ 
+    Отдельной сущности для фона нет специально — фон это тот же Token с
+    layer=0, locked=True и character_id=None. Разница между "фоном" и
+    "токеном" — это вопрос значения полей, а не структуры данных.
+ 
+    Координаты и размер — во float-пикселях канвы, а не в клетках сетки.
+    Это позволяет одинаково хранить и токены персонажей (обычно кратные
+    grid_size), и фон/пропсы произвольного размера, не выровненные по
+    сетке. Привязка к сетке (snapping) — чисто клиентская UX-фича при
+    перетаскивании, на модели она никак не завязана."""
+ 
     __tablename__ = "tokens"
-
+ 
     id = db.Column(db.Integer, primary_key=True)
     battle_map_id = db.Column(db.Integer, db.ForeignKey("battle_maps.id"), nullable=False)
     character_id = db.Column(
         db.Integer, db.ForeignKey("characters.id"), nullable=True
-    )  # null для NPC/монстров без листа персонажа
-    label = db.Column(db.String(100), nullable=True)  # имя для NPC, если character_id пуст
+    )  # null для NPC/монстров/фона/пропсов
+    label = db.Column(db.String(100), nullable=True)  # имя для NPC или подпись пропса
     image_url = db.Column(db.String(500), nullable=True)
-    pos_x = db.Column(db.Integer, default=0, nullable=False)  # в клетках
-    pos_y = db.Column(db.Integer, default=0, nullable=False)
-    size = db.Column(db.Integer, default=1, nullable=False)  # 1 = одна клетка, 2 = 2x2 и т.д.
+ 
+    pos_x = db.Column(db.Float, default=0, nullable=False)  # px на канве
+    pos_y = db.Column(db.Float, default=0, nullable=False)
+    width = db.Column(db.Float, default=50, nullable=False)  # px
+    height = db.Column(db.Float, default=50, nullable=False)
+    rotation = db.Column(db.Float, default=0, nullable=False)  # градусы, 0-360
+ 
+    layer = db.Column(db.Integer, default=10, nullable=False)  # 0 = фон, 10 = обычный токен
+    locked = db.Column(db.Boolean, default=False, nullable=False)  # запрет двигать игрокам
     visible_to_players = db.Column(db.Boolean, default=True, nullable=False)
-
+ 
     battle_map = db.relationship("BattleMap", back_populates="tokens")
     character = db.relationship("Character", back_populates="tokens")
-
+ 
     def __repr__(self):
-        return f"<Token {self.label or self.character_id} @ ({self.pos_x},{self.pos_y})>"
+        return f"<Token {self.label or self.character_id} layer={self.layer} @ ({self.pos_x},{self.pos_y})>"
 
 
 class DrawingShape(db.Model):

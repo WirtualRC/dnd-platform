@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+import dotenv
+
+dotenv.load_dotenv()
 
 # Базовая директория бэкенда (backend/)
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -9,7 +12,7 @@ class Config:
     
     # Секретный ключ для подписи сессий и CSRF. 
     # В проде ОБЯЗАТЕЛЬНО переопределять через переменные окружения!
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'super-secret-dev-key-change-me')
+    SECRET_KEY = os.environ.get('SECRET_KEY')
     
     # SQLAlchemy
     SQLALCHEMY_TRACK_MODIFICATIONS = False  # Отключаем, чтобы не жрать память
@@ -30,14 +33,9 @@ class DevConfig(Config):
     """Конфигурация для локальной разработки."""
     DEBUG = True
     
-    # Для локалки используем SQLite. 
-    # Если ты сразу планируешь Postgres в Docker, можно заменить на:
-    # 'postgresql://postgres:postgres@db:5432/dnd_dev'
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        'DATABASE_URL', 
-        f'sqlite:///{BASE_DIR / "dnd_dev.db"}'
+        'DATABASE_URL'
     )
-    
     # В дев-режиме разрешаем подключения с локальных адресов Vite
     CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
