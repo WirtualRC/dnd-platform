@@ -11,6 +11,7 @@ import secrets
 from datetime import datetime, timezone
 
 from flask_login import UserMixin
+from sqlalchemy.ext.associationproxy import association_proxy
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from ..extensions import db
@@ -83,8 +84,10 @@ class Room(db.Model):
         "RoomMembership", back_populates="room", cascade="all, delete-orphan"
     )
     characters = db.relationship(
-        "Character", back_populates="room", cascade="all, delete-orphan"
+        "CharacterRoomLink", back_populates="room", cascade="all, delete-orphan"
     )
+    # удобный доступ room.character_list -> список Character
+    character_list = association_proxy("characters", "character")
     dice_rolls = db.relationship(
         "DiceRoll",
         back_populates="room",
@@ -115,11 +118,19 @@ class RoomMembership(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     role = db.Column(db.Enum(RoomRole, name="room_role"), nullable=False)
 
-    active_character_id = db.Column(db.Integer, db.ForeignKey("characters.id"), nullable=True)
+    # какого персонажа этот участник сейчас использует в этой конкретной
+    # комнате — актуально, раз персонаж может состоять в нескольких
+    # комнатах и/или у игрока их несколько в одной комнате (см. CharacterRoomLink).
+    # ondelete="SET NULL": если персонажа удалят, membership не должен
+    # ломаться внешним ключом в никуда — просто обнулится указатель.
+    active_character_id = db.Column(
+        db.Integer, db.ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
+    )
     joined_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
 
     room = db.relationship("Room", back_populates="memberships")
     user = db.relationship("User", back_populates="memberships")
+    active_character = db.relationship("Character")
 
     def __repr__(self):
         return f"<Membership user={self.user_id} room={self.room_id} role={self.role.value}>"
@@ -145,9 +156,36 @@ class Character(db.Model):
 
     owner = db.relationship("User", back_populates="characters")
     tokens = db.relationship("Token", back_populates="character")
+    room_links = db.relationship(
+        "CharacterRoomLink", back_populates="character", cascade="all, delete-orphan"
+    )
+    # удобный доступ character.rooms -> список Room без похода через room_links
+    rooms = association_proxy("room_links", "room")
 
     def __repr__(self):
         return f"<Character {self.name}>"
+
+
+class CharacterRoomLink(db.Model):
+    """Многие-ко-многим между Character и Room: один персонаж может быть
+    одновременно активен в нескольких играх (ваншоты, west-marches и т.п.),
+    а не только в одной, как было бы при скалярном room_id на Character."""
+
+    __tablename__ = "character_room_links"
+    __table_args__ = (
+        db.UniqueConstraint("character_id", "room_id", name="uq_character_room"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    character_id = db.Column(db.Integer, db.ForeignKey("characters.id"), nullable=False)
+    room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False)
+    joined_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    character = db.relationship("Character", back_populates="room_links")
+    room = db.relationship("Room", back_populates="characters")
+
+    def __repr__(self):
+        return f"<CharacterRoomLink char={self.character_id} room={self.room_id}>"
 
 
 class DiceRoll(db.Model):
@@ -159,6 +197,9 @@ class DiceRoll(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    # nullable: бросок может быть не привязан к конкретному персонажу
+    # (например GM кидает за NPC, или у игрока ещё нет персонажа в комнате)
     character_id = db.Column(db.Integer, db.ForeignKey("characters.id"), nullable=True)
     formula = db.Column(db.String(50), nullable=False)  # например "2d6+3"
     result = db.Column(db.Integer, nullable=False)
@@ -166,6 +207,7 @@ class DiceRoll(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False, index=True)
 
     room = db.relationship("Room", back_populates="dice_rolls")
+    user = db.relationship("User")
     character = db.relationship("Character")
 
     def __repr__(self):
@@ -181,9 +223,8 @@ class BattleMap(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False, unique=True)
-    background_image_url = db.Column(db.String(500), nullable=True)
     grid_size = db.Column(db.Integer, default=50, nullable=False)  # px на клетку
-    width = db.Column(db.Integer, default=1200, nullable=False)
+    width = db.Column(db.Integer, default=1200, nullable=False)  # размер канвы в px
     height = db.Column(db.Integer, default=800, nullable=False)
     updated_at = db.Column(
         db.DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
@@ -201,19 +242,32 @@ class BattleMap(db.Model):
 class Token(db.Model):
     """Любое изображение на боевой карте: токен персонажа, монстр без
     листа, фон карты или произвольный декоративный пропс (как в Owlbear).
- 
+
     Отдельной сущности для фона нет специально — фон это тот же Token с
     layer=0, locked=True и character_id=None. Разница между "фоном" и
     "токеном" — это вопрос значения полей, а не структуры данных.
- 
+
     Координаты и размер — во float-пикселях канвы, а не в клетках сетки.
     Это позволяет одинаково хранить и токены персонажей (обычно кратные
     grid_size), и фон/пропсы произвольного размера, не выровненные по
     сетке. Привязка к сетке (snapping) — чисто клиентская UX-фича при
-    перетаскивании, на модели она никак не завязана."""
- 
+    перетаскивании, на модели она никак не завязана.
+
+    hp_current/hp_max — HP КОНКРЕТНОГО ЭКЗЕМПЛЯРА в этом бою, отдельно от
+    character.sheet_data.vitality.hp_current. Это принципиально: один
+    Character (лист "Гоблин") может стоять на карте несколькими Token
+    одновременно — каждый со своим здоровьем. Если бы урон писался прямо
+    в character.sheet_data, ранение одного гоблина мгновенно лечило/ранило
+    бы всех остальных токенов с тем же character_id, потому что это одна
+    и та же строка в БД. При создании токена hp_current/hp_max копируются
+    из sheet_data персонажа как стартовое значение и дальше живут
+    независимо. Для игровых персонажей sheet_data остаётся источником
+    истины между сессиями — синхронизация обратно делается отдельным
+    осознанным действием (например по кнопке "конец боя"), а не
+    автоматически на каждый урон."""
+
     __tablename__ = "tokens"
- 
+
     id = db.Column(db.Integer, primary_key=True)
     battle_map_id = db.Column(db.Integer, db.ForeignKey("battle_maps.id"), nullable=False)
     character_id = db.Column(
@@ -221,20 +275,30 @@ class Token(db.Model):
     )  # null для NPC/монстров/фона/пропсов
     label = db.Column(db.String(100), nullable=True)  # имя для NPC или подпись пропса
     image_url = db.Column(db.String(500), nullable=True)
- 
+
+    hp_current = db.Column(db.Integer, nullable=True)  # null для токенов без HP (пропсы, фон)
+    hp_max = db.Column(db.Integer, nullable=True)
+
     pos_x = db.Column(db.Float, default=0, nullable=False)  # px на канве
     pos_y = db.Column(db.Float, default=0, nullable=False)
     width = db.Column(db.Float, default=50, nullable=False)  # px
     height = db.Column(db.Float, default=50, nullable=False)
     rotation = db.Column(db.Float, default=0, nullable=False)  # градусы, 0-360
- 
+
     layer = db.Column(db.Integer, default=10, nullable=False)  # 0 = фон, 10 = обычный токен
     locked = db.Column(db.Boolean, default=False, nullable=False)  # запрет двигать игрокам
     visible_to_players = db.Column(db.Boolean, default=True, nullable=False)
- 
+
+    # Снимок sheet_data на момент спавна — только для клонированных
+    # экземпляров (саммоны, повторно используемые монстры). None означает
+    # "это обычный токен 1:1, живые данные читаются из character.sheet_data
+    # напрямую". Если задано — это независимая копия, HP/состояния этого
+    # конкретного токена правятся только здесь, шаблон-Character не трогается.
+    instance_data = db.Column(db.JSON, nullable=True)
+
     battle_map = db.relationship("BattleMap", back_populates="tokens")
     character = db.relationship("Character", back_populates="tokens")
- 
+
     def __repr__(self):
         return f"<Token {self.label or self.character_id} layer={self.layer} @ ({self.pos_x},{self.pos_y})>"
 

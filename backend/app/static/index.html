@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Тест листа персонажа</title>
+<style>
+  :root {
+    --bg: #1c1a17; --surface: #2a2622; --surface2: #35302a;
+    --border: #4a443c; --text: #e8e2d5; --text-dim: #a89e8c;
+    --accent: #c9822f; --danger: #b5453a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 24px; max-width: 980px; margin-inline: auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 20px; }
+  h2 { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin: 24px 0 10px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  input, select, textarea, button {
+    background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; font-size: 14px; font-family: inherit;
+  }
+  input, select, textarea { width: 100%; }
+  textarea { resize: vertical; min-height: 60px; }
+  button { cursor: pointer; background: var(--accent); border: none; color: #1c1a17; font-weight: 600; }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: var(--danger); color: white; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .row > * { flex: 1; }
+  .grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
+  .stat-box label { display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 4px; }
+  .stat-box input { text-align: center; font-size: 18px; font-weight: 700; padding: 4px; }
+  .stat-box .mod { font-size: 12px; color: var(--accent); margin-top: 4px; }
+  .char-list-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+  .char-list-item:hover { border-color: var(--accent); }
+  .skills-list { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+  .skill-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .skill-row input[type=checkbox] { width: auto; }
+  .skill-row .skill-name { flex: 1; }
+  .skill-row .skill-bonus { color: var(--accent); font-weight: 600; width: 32px; text-align: right; }
+  .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .hidden { display: none !important; }
+  .save-status { font-size: 12px; color: var(--text-dim); }
+  #error-box { background: var(--danger); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<div id="error-box" class="hidden"></div>
+
+<!-- ЭКРАН АВТОРИЗАЦИИ -->
+<div id="auth-screen" class="card">
+  <h1>Вход / регистрация</h1>
+  <div class="row">
+    <input id="auth-username" placeholder="имя пользователя">
+    <input id="auth-email" placeholder="email (только для регистрации)">
+    <input id="auth-password" type="password" placeholder="пароль (мин. 6 симв.)">
+  </div>
+  <div class="row">
+    <button onclick="doLogin()">Войти</button>
+    <button class="secondary" onclick="doRegister()">Зарегистрироваться</button>
+  </div>
+</div>
+
+<!-- ОСНОВНОЙ ЭКРАН -->
+<div id="main-screen" class="hidden">
+  <div class="top-bar">
+    <h1>Мои персонажи (<span id="whoami"></span>)</h1>
+    <button class="secondary" onclick="doLogout()">Выйти</button>
+  </div>
+
+  <div id="char-list" class="card"></div>
+  <div class="row">
+    <input id="new-char-name" placeholder="имя нового персонажа">
+    <button onclick="createCharacter()">+ Создать персонажа</button>
+  </div>
+
+  <!-- ЛИСТ ПЕРСОНАЖА -->
+  <div id="sheet" class="hidden">
+    <h2>Лист персонажа <span class="save-status" id="save-status"></span></h2>
+    <div class="card">
+      <div class="row">
+        <input id="s-name" placeholder="имя">
+        <input id="s-class" placeholder="класс">
+        <input id="s-level" type="number" placeholder="уровень" style="max-width:100px">
+        <input id="s-race" placeholder="раса">
+      </div>
+
+      <h2>Характеристики</h2>
+      <div class="grid-6" id="stats-grid"></div>
+
+      <h2>Здоровье и защита</h2>
+      <div class="grid-3">
+        <div class="stat-box"><label>HP текущее</label><input id="s-hp-current" type="number"></div>
+        <div class="stat-box"><label>HP максимум</label><input id="s-hp-max" type="number"></div>
+        <div class="stat-box"><label>Класс брони</label><input id="s-ac" type="number"></div>
+      </div>
+
+      <h2>Навыки</h2>
+      <div class="skills-list" id="skills-list"></div>
+
+      <h2>Действия и заклинания</h2>
+      <div id="actions-list"></div>
+      <button class="secondary" onclick="addAction()">+ Добавить действие</button>
+
+      <h2>Предыстория</h2>
+      <textarea id="s-backstory" placeholder="история персонажа..."></textarea>
+
+      <div class="row" style="margin-top:16px">
+        <button onclick="saveCharacter()">Сохранить</button>
+        <button class="secondary" onclick="closeSheet()">Закрыть</button>
+        <button class="danger" onclick="deleteCurrentCharacter()">Удалить персонажа</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/v1';
+const STATS = ['str','dex','con','int','wis','cha'];
+const STAT_LABELS = {str:'Сила', dex:'Ловкость', con:'Телослож.', int:'Интеллект', wis:'Мудрость', cha:'Харизма'};
+const SKILLS = [
+  ['acrobatics','Акробатика','dex'], ['investigation','Анализ','int'], ['athletics','Атлетика','str'],
+  ['perception','Восприятие','wis'], ['survival','Выживание','wis'], ['performance','Выступление','cha'],
+  ['intimidation','Запугивание','cha'], ['history','История','int'], ['sleight_of_hand','Ловкость рук','dex'],
+  ['arcana','Магия','int'], ['medicine','Медицина','wis'], ['deception','Обман','cha'],
+  ['nature','Природа','int'], ['insight','Проницательность','wis'], ['religion','Религия','int'],
+  ['stealth','Скрытность','dex'], ['persuasion','Убеждение','cha'], ['animal_handling','Уход за животными','wis'],
+];
+
+let currentCharacters = [];
+let currentSheetId = null;
+let sheetData = {};
+let saveTimer = null;
+
+function showError(msg) {
+  const box = document.getElementById('error-box');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  setTimeout(() => box.classList.add('hidden'), 4000);
+}
+
+async function api(path, options = {}) {
+  const resp = await fetch(API + path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+async function doRegister() {
+  try {
+    await api('/auth/register', { method: 'POST', body: JSON.stringify({
+      username: val('auth-username'), email: val('auth-email'), password: val('auth-password')
+    })});
+    await enterApp();
+  } catch (e) { showError(e.message); }
+}
+
+async function doLogin() {
+  try {
+    await api('/auth/login', { method: 'POST', body: JSON.stringify({
+      username: val('auth-username'), password: val('auth-password')
+    })});
+    await enterApp();
+  } catch (e) { showError(e.message); }
+}
+
+async function doLogout() {
+  await api('/auth/logout', { method: 'POST' });
+  document.getElementById('main-screen').classList.add('hidden');
+  document.getElementById('auth-screen').classList.remove('hidden');
+}
+
+async function enterApp() {
+  const me = await api('/auth/me');
+  document.getElementById('whoami').textContent = me.username;
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('main-screen').classList.remove('hidden');
+  await loadCharacters();
+}
+
+async function loadCharacters() {
+  const data = await api('/characters');
+  currentCharacters = data.characters;
+  const list = document.getElementById('char-list');
+  list.innerHTML = currentCharacters.length
+    ? currentCharacters.map(c => `
+        <div class="char-list-item" onclick="openSheet(${c.id})">
+          <span>${escapeHtml(c.name)}</span>
+          <span class="save-status">${(c.sheet_data.class_name || '')} ${c.sheet_data.level || ''}</span>
+        </div>`).join('')
+    : '<div class="save-status">Персонажей пока нет — создай первого ниже.</div>';
+}
+
+async function createCharacter() {
+  const name = val('new-char-name');
+  if (!name) return showError('Введи имя персонажа');
+  try {
+    await api('/characters', { method: 'POST', body: JSON.stringify({ name, sheet_data: {} }) });
+    document.getElementById('new-char-name').value = '';
+    await loadCharacters();
+  } catch (e) { showError(e.message); }
+}
+
+async function deleteCurrentCharacter() {
+  if (!currentSheetId) return;
+  if (!confirm('Удалить персонажа безвозвратно?')) return;
+  await api(`/characters/${currentSheetId}`, { method: 'DELETE' });
+  closeSheet();
+  await loadCharacters();
+}
+
+function buildStatsGrid() {
+  const grid = document.getElementById('stats-grid');
+  grid.innerHTML = STATS.map(s => `
+    <div class="stat-box">
+      <label>${STAT_LABELS[s]}</label>
+      <input id="stat-${s}" type="number" oninput="updateStatMod('${s}')">
+      <div class="mod" id="mod-${s}">+0</div>
+    </div>`).join('');
+}
+
+function updateStatMod(stat) {
+  const score = parseInt(document.getElementById(`stat-${stat}`).value) || 10;
+  const mod = Math.floor((score - 10) / 2);
+  document.getElementById(`mod-${stat}`).textContent = (mod >= 0 ? '+' : '') + mod;
+  updateAllSkillBonuses();
+}
+
+function updateAllSkillBonuses() {
+  SKILLS.forEach(([key, , stat]) => {
+    const score = parseInt(document.getElementById(`stat-${stat}`)?.value) || 10;
+    const mod = Math.floor((score - 10) / 2);
+    const isProf = document.getElementById(`skill-prof-${key}`)?.checked;
+    const bonus = mod + (isProf ? 2 : 0); // proficiency bonus упрощённо = +2 для теста
+    const el = document.getElementById(`skill-bonus-${key}`);
+    if (el) el.textContent = (bonus >= 0 ? '+' : '') + bonus;
+  });
+}
+
+function buildSkillsList() {
+  const list = document.getElementById('skills-list');
+  list.innerHTML = SKILLS.map(([key, label]) => `
+    <div class="skill-row">
+      <input type="checkbox" id="skill-prof-${key}" onchange="updateAllSkillBonuses()">
+      <span class="skill-name">${label}</span>
+      <span class="skill-bonus" id="skill-bonus-${key}">+0</span>
+    </div>`).join('');
+}
+
+function addAction(action = {}) {
+  const list = document.getElementById('actions-list');
+  const idx = list.children.length;
+  const row = document.createElement('div');
+  row.className = 'row action-row';
+  row.innerHTML = `
+    <input placeholder="название" class="a-name" value="${escapeHtml(action.name || '')}">
+    <select class="a-type" style="max-width:120px">
+      <option value="attack" ${action.type === 'attack' ? 'selected' : ''}>атака</option>
+      <option value="spell" ${action.type === 'spell' ? 'selected' : ''}>заклинание</option>
+    </select>
+    <input placeholder="урон (2d6+3)" class="a-damage" style="max-width:120px" value="${escapeHtml(action.damage || '')}">
+    <input placeholder="радиус, фт" class="a-radius" type="number" style="max-width:100px" value="${action.aoe?.radius_ft ?? ''}">
+    <button class="secondary" onclick="this.parentElement.remove()">✕</button>`;
+  list.appendChild(row);
+}
+
+function collectActions() {
+  return [...document.querySelectorAll('.action-row')].map(row => {
+    const radius = row.querySelector('.a-radius').value;
+    return {
+      name: row.querySelector('.a-name').value,
+      type: row.querySelector('.a-type').value,
+      damage: row.querySelector('.a-damage').value,
+      ...(radius ? { aoe: { shape: 'circle', radius_ft: parseInt(radius) } } : {})
+    };
+  });
+}
+
+async function openSheet(id) {
+  const data = await api(`/characters/${id}`);
+  currentSheetId = id;
+  sheetData = data.sheet_data || {};
+
+  buildStatsGrid();
+  buildSkillsList();
+
+  document.getElementById('s-name').value = data.name || '';
+  document.getElementById('s-class').value = sheetData.class_name || '';
+  document.getElementById('s-level').value = sheetData.level || '';
+  document.getElementById('s-race').value = sheetData.race || '';
+  document.getElementById('s-hp-current').value = sheetData.vitality?.hp_current ?? '';
+  document.getElementById('s-hp-max').value = sheetData.vitality?.hp_max ?? '';
+  document.getElementById('s-ac').value = sheetData.vitality?.ac ?? '';
+  document.getElementById('s-backstory').value = sheetData.backstory || '';
+
+  STATS.forEach(s => {
+    document.getElementById(`stat-${s}`).value = sheetData.stats?.[s] ?? 10;
+    updateStatMod(s);
+  });
+  (sheetData.skills_proficient || []).forEach(key => {
+    const el = document.getElementById(`skill-prof-${key}`);
+    if (el) el.checked = true;
+  });
+  updateAllSkillBonuses();
+
+  document.getElementById('actions-list').innerHTML = '';
+  (sheetData.actions || []).forEach(a => addAction(a));
+
+  document.getElementById('sheet').classList.remove('hidden');
+  document.getElementById('sheet').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeSheet() {
+  currentSheetId = null;
+  document.getElementById('sheet').classList.add('hidden');
+}
+
+async function saveCharacter() {
+  if (!currentSheetId) return;
+  const newSheetData = {
+    class_name: val('s-class'),
+    level: parseInt(val('s-level')) || 1,
+    race: val('s-race'),
+    stats: Object.fromEntries(STATS.map(s => [s, parseInt(document.getElementById(`stat-${s}`).value) || 10])),
+    skills_proficient: SKILLS.filter(([key]) => document.getElementById(`skill-prof-${key}`).checked).map(([key]) => key),
+    vitality: {
+      hp_current: parseInt(val('s-hp-current')) || 0,
+      hp_max: parseInt(val('s-hp-max')) || 0,
+      ac: parseInt(val('s-ac')) || 10,
+    },
+    actions: collectActions(),
+    backstory: val('s-backstory'),
+  };
+
+  document.getElementById('save-status').textContent = 'сохранение...';
+  try {
+    await api(`/characters/${currentSheetId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: val('s-name'), sheet_data: newSheetData })
+    });
+    document.getElementById('save-status').textContent = '✓ сохранено ' + new Date().toLocaleTimeString();
+    await loadCharacters();
+  } catch (e) {
+    showError(e.message);
+    document.getElementById('save-status').textContent = '';
+  }
+}
+
+function val(id) { return document.getElementById(id).value.trim(); }
+function escapeHtml(str) {
+  const d = document.createElement('div'); d.textContent = str ?? ''; return d.innerHTML;
+}
+
+// если уже залогинены (кука жива) — сразу входим
+api('/auth/me').then(enterApp).catch(() => {});
+</script>
+</body>
+</html>

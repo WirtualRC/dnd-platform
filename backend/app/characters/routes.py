@@ -10,9 +10,9 @@ characters_bp = Blueprint('characters', __name__)
 @characters_bp.route('', methods=['GET'])
 @login_required
 def get_my_characters():
-    """Получение списка всех моих персонажей (включая тех, что в комнатах)."""
+    """Получение списка всех моих персонажей (личная библиотека)."""
     characters = Character.query.filter_by(owner_id=current_user.id).all()
-    
+
     result = []
     for char in characters:
         result.append({
@@ -22,14 +22,31 @@ def get_my_characters():
             "sheet_data": char.sheet_data,
             "updated_at": char.updated_at.isoformat()
         })
-    
+
     return jsonify({"characters": result}), 200
+
+
+@characters_bp.route('/<int:char_id>', methods=['GET'])
+@login_required
+def get_character(char_id):
+    """Получение одного персонажа для редактирования на странице листа."""
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    return jsonify({
+        "id": character.id,
+        "name": character.name,
+        "avatar_url": character.avatar_url,
+        "sheet_data": character.sheet_data,
+        "updated_at": character.updated_at.isoformat()
+    }), 200
 
 
 @characters_bp.route('', methods=['POST'])
 @login_required
 def create_character():
-    """Создание нового персонажа в мою библиотеку (без привязки к комнате)."""
+    """Создание нового персонажа в личную библиотеку (без привязки к комнате)."""
     data = request.get_json()
     if not data or not data.get('name'):
         return jsonify({"error": "Character name is required"}), 400
@@ -41,6 +58,8 @@ def create_character():
     new_char = Character(
         name=char_name,
         owner_id=current_user.id,
+        # room_id больше не существует как поле — персонаж привязывается
+        # к комнатам через CharacterRoomLink отдельным запросом
         avatar_url=data.get('avatar_url'),
         sheet_data=data.get('sheet_data', {})
     )
@@ -69,7 +88,6 @@ def update_character(char_id):
     """Обновление данных моего персонажа."""
     character = Character.query.get_or_404(char_id)
 
-    # Проверка, что это мой персонаж
     if character.owner_id != current_user.id:
         return jsonify({"error": "Permission denied"}), 403
 
@@ -105,7 +123,7 @@ def update_character(char_id):
 @characters_bp.route('/<int:char_id>', methods=['DELETE'])
 @login_required
 def delete_character(char_id):
-    """Полное удаление персонажа из моей библиотеки (навсегда)."""
+    """Полное удаление персонажа из библиотеки."""
     character = Character.query.get_or_404(char_id)
 
     if character.owner_id != current_user.id:

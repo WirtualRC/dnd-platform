@@ -134,6 +134,30 @@ def get_room(room_id):
     }), 200
 
 
+@rooms_bp.route('/<int:room_id>/dice-history', methods=['GET'])
+@login_required
+def get_dice_history(room_id):
+    """История бросков — то, что подтянется при заходе в комнату/обновлении страницы,
+    в дополнение к живым событиям dice_roll по сокету."""
+    room = Room.query.get_or_404(room_id)
+    if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
+        return jsonify({"error": "Access denied"}), 403
+ 
+    rolls = [
+        {
+            "id": r.id,
+            "user": r.user.username,
+            "character_id": r.character_id,
+            "formula": r.formula,
+            "result": r.result,
+            "breakdown": r.breakdown,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in room.dice_rolls
+    ]
+    return jsonify({"rolls": rolls}), 200
+
+
 # ============================================================================
 # ПЕРСОНАЖИ В КОМНАТЕ (управление составом игроков)
 # ============================================================================
@@ -255,9 +279,7 @@ def unassign_character_from_room(room_id, char_id):
 @rooms_bp.route('/<int:room_id>/battle-map', methods=['GET'])
 @login_required
 def get_battle_map(room_id):
-    """Получение состояния боевой карты."""
     room = Room.query.get_or_404(room_id)
- 
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
  
@@ -265,11 +287,13 @@ def get_battle_map(room_id):
     if not battle_map:
         return jsonify({"error": "Battle map not found"}), 404
  
-    # Фон — это тот же Token с layer=0, отдельного поля для него нет.
-    # Сортируем по layer, чтобы фронтенд мог просто отрендерить по порядку
-    # (Konva.Layer использует порядок добавления как z-index).
     objects = []
     for token in sorted(battle_map.tokens, key=lambda t: t.layer):
+        # instance_data (если есть) — источник истины для этого конкретного
+        # токена, sheet_data шаблона в этом случае не читаем вообще
+        live_sheet = token.instance_data if token.instance_data is not None else (
+            token.character.sheet_data if token.character else None
+        )
         objects.append({
             "id": token.id,
             "character_id": token.character_id,
@@ -283,6 +307,8 @@ def get_battle_map(room_id):
             "layer": token.layer,
             "locked": token.locked,
             "visible_to_players": token.visible_to_players,
+            "is_instance": token.instance_data is not None,
+            "hp_current": (live_sheet or {}).get("vitality", {}).get("hp_current"),
         })
  
     return jsonify({
