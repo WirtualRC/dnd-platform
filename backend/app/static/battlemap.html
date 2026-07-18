@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Тест боевой карты</title>
+<script src="https://unpkg.com/konva@10/konva.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #1c1a17; --surface: #2a2622; --surface2: #35302a;
+    --border: #4a443c; --text: #e8e2d5; --text-dim: #a89e8c;
+    --accent: #c9822f; --danger: #b5453a; --ok: #4f8a5b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; max-width: 1100px; margin-inline: auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 8px; }
+  a { color: var(--accent); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  input, select, button {
+    background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  button { cursor: pointer; background: var(--accent); border: none; color: #1c1a17; font-weight: 600; }
+  button.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+  .row > input, .row > select { flex: 1; min-width: 100px; }
+  label.check { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+  label.check input { width: auto; }
+  #canvas-holder { border: 1px solid var(--border); border-radius: 8px; overflow: auto; background: #22201c; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; background: var(--surface2); border: 1px solid var(--border); }
+  .pill.combat { background: var(--danger); color: white; border: none; }
+  .pill.roleplay { background: var(--ok); color: white; border: none; }
+  #log { max-height: 140px; overflow-y: auto; font-size: 12px; color: var(--text-dim); }
+  #log div { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .hidden { display: none !important; }
+  #error-box { background: var(--danger); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+  .top-bar { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<div id="error-box" class="hidden"></div>
+
+<div class="top-bar">
+  <h1>Тест боевой карты (Konva)</h1>
+  <a href="/">← лист персонажа</a>
+</div>
+
+<!-- АВТОРИЗАЦИЯ -->
+<div id="auth-card" class="card">
+  <div class="row">
+    <input id="auth-username" placeholder="имя пользователя">
+    <input id="auth-email" placeholder="email (для регистрации)">
+    <input id="auth-password" type="password" placeholder="пароль">
+    <button onclick="doLogin()">Войти</button>
+    <button class="secondary" onclick="doRegister()">Регистрация</button>
+  </div>
+</div>
+
+<!-- КОМНАТА -->
+<div id="room-card" class="card hidden">
+  <div id="no-room-block">
+    <div class="row">
+      <input id="new-room-name" placeholder="название новой комнаты">
+      <button onclick="createRoom()">Создать комнату</button>
+    </div>
+    <div class="row">
+      <input id="join-code" placeholder="код приглашения">
+      <button onclick="joinRoomByCode()">Войти по коду</button>
+    </div>
+  </div>
+  <div id="in-room-block" class="hidden">
+    <div class="row">
+      <span>Комната: <strong id="room-name-label"></strong></span>
+      <span class="pill" id="invite-code-label"></span>
+      <span class="pill" id="mode-label"></span>
+      <button class="secondary" id="toggle-mode-btn" onclick="toggleMode()">Переключить режим (только GM)</button>
+    </div>
+  </div>
+</div>
+
+<!-- БОЕВАЯ КАРТА -->
+<div id="map-section" class="hidden">
+  <h2>Мои действия</h2>
+  <div class="card">
+    <div class="row">
+      <select id="action-character-select" onchange="renderActionBar(parseInt(this.value))"></select>
+    </div>
+    <div class="row" id="action-bar"></div>
+    <div style="font-size:12px;color:var(--text-dim)">
+      Выбери действие, наведи на карту — появится область поражения (если есть) и кольцо дальности от твоего токена.
+      Клик подтверждает каст, Escape отменяет.
+    </div>
+  </div>
+
+  <h2>Добавить токен</h2>
+  <div class="card">
+    <div class="row">
+      <select id="char-select"></select>
+      <label class="check"><input type="checkbox" id="as-instance-check"> клон (саммон/монстр)</label>
+      <label class="check"><input type="checkbox" id="visible-check" checked> виден игрокам</label>
+    </div>
+    <div class="row">
+      <input id="token-x" type="number" placeholder="x" value="100" style="max-width:80px">
+      <input id="token-y" type="number" placeholder="y" value="100" style="max-width:80px">
+      <input id="token-label" placeholder="подпись (для NPC без имени)">
+      <label class="check"><input type="checkbox" id="as-background-check"> это фон карты</label>
+    </div>
+    <div class="row">
+      <input id="token-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+      <button onclick="addToken()">+ Добавить токен</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-dim)">
+      Токен можно перетаскивать мышью — двигать можно свой персонаж (в т.ч. саммонов), свои же вставленные картинки,
+      или что угодно, если ты GM. Одиночный клик — выделить (ручки для ресайза за угол и поворота сверху).
+      Двойной клик — задать новое HP. Клик по пустому месту карты снимает выделение.
+    </div>
+  </div>
+
+  <h2>Карта</h2>
+  <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+    Колесо мыши — зум к точке под курсором. Драг по пустому месту карты — панорамирование.
+    Совет: скопируй картинку откуда угодно (браузер, файловый менеджер) и нажми Ctrl+V прямо на странице —
+    вставится на карту в точку, где последний раз был курсор.
+  </div>
+  <div class="row">
+    <button class="secondary" onclick="resetView()">Сбросить вид</button>
+  </div>
+  <div id="canvas-holder"></div>
+
+  <h2>Кубики</h2>
+  <div class="card">
+    <div class="row">
+      <input id="dice-formula" placeholder="например 2d6+3" value="1d20">
+      <button onclick="rollDice()">Бросить</button>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const API = '/api/v1';
+let socket = null;
+let currentRoomId = null;
+let currentBattleMapId = null;
+let isCurrentUserGm = false;
+let currentUserId = null;
+let stage, tokenLayer, gridLayer, backgroundLayer, transformer;
+let tokensById = {};
+let myCharacterIds = new Set();
+let currentMapWidth = 1200, currentMapHeight = 800, currentGridSize = 50;
+let lastCanvasPos = { x: 100, y: 100 };
+let selectedTokenId = null;
+let tokenDataById = {}; // pos_x/pos_y/character_id последних известных токенов — для кольца дальности
+let currentActionsById = {};
+let activeAction = null;
+let activeCasterCharacterId = null;
+let previewLayer;
+
+function showError(msg) {
+  const box = document.getElementById('error-box');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  setTimeout(() => box.classList.add('hidden'), 4000);
+}
+
+function val(id) { return document.getElementById(id).value.trim(); }
+
+async function api(path, options = {}) {
+  const resp = await fetch(API + path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+function throttle(fn, wait) {
+  let lastCall = 0, timeout = null;
+  return (...args) => {
+    const now = Date.now();
+    const remaining = wait - (now - lastCall);
+    if (remaining <= 0) {
+      clearTimeout(timeout);
+      lastCall = now;
+      fn(...args);
+    } else if (!timeout) {
+      timeout = setTimeout(() => { lastCall = Date.now(); timeout = null; fn(...args); }, remaining);
+    }
+  };
+}
+
+function log(text) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.textContent = text;
+  el.prepend(line);
+}
+
+// --- авторизация ---
+async function doRegister() {
+  try {
+    await api('/auth/register', { method: 'POST', body: JSON.stringify({
+      username: val('auth-username'), email: val('auth-email'), password: val('auth-password')
+    })});
+    await afterLogin();
+  } catch (e) { showError(e.message); }
+}
+
+async function doLogin() {
+  try {
+    await api('/auth/login', { method: 'POST', body: JSON.stringify({
+      username: val('auth-username'), password: val('auth-password')
+    })});
+    await afterLogin();
+  } catch (e) { showError(e.message); }
+}
+
+async function afterLogin() {
+  document.getElementById('auth-card').classList.add('hidden');
+  document.getElementById('room-card').classList.remove('hidden');
+  connectSocket();
+  await loadMyCharactersIntoSelect();
+}
+
+function connectSocket() {
+  socket = io({ withCredentials: true });
+
+  socket.on('error', (data) => showError(data.message));
+
+  socket.on('token_added', (data) => {
+    if (data.battle_map_id !== currentBattleMapId) return;
+    upsertTokenNode(data);
+  });
+
+  socket.on('token_state_changed', (data) => {
+    const node = tokensById[data.token_id];
+    if (node && 'hp_current' in data.vitality_patch) {
+      node.hpText.text(`HP ${data.vitality_patch.hp_current}`);
+      tokenLayer.draw();
+    }
+  });
+
+  socket.on('token_moved_live', (data) => {
+    const node = tokensById[data.token_id];
+    if (node) { node.group.position({ x: data.pos_x, y: data.pos_y }); tokenLayer.batchDraw(); }
+    if (tokenDataById[data.token_id]) {
+      tokenDataById[data.token_id].pos_x = data.pos_x;
+      tokenDataById[data.token_id].pos_y = data.pos_y;
+    }
+  });
+
+  socket.on('token_moved_committed', (data) => {
+    const node = tokensById[data.token_id];
+    if (node) {
+      node.group.position({ x: data.pos_x, y: data.pos_y });
+      node.group.rotation(data.rotation || 0);
+      if (data.width && data.height) applyTokenSize(node, data.width, data.height);
+      tokenLayer.batchDraw();
+    }
+    if (tokenDataById[data.token_id]) {
+      tokenDataById[data.token_id].pos_x = data.pos_x;
+      tokenDataById[data.token_id].pos_y = data.pos_y;
+    }
+  });
+
+  socket.on('token_removed', (data) => {
+    const node = tokensById[data.token_id];
+    if (node) {
+      node.group.destroy();
+      delete tokensById[data.token_id];
+      delete tokenDataById[data.token_id];
+      if (selectedTokenId === data.token_id) {
+        transformer.nodes([]);
+        selectedTokenId = null;
+      }
+      tokenLayer.draw();
+    }
+  });
+
+  socket.on('mode_changed', (data) => {
+    if (data.room_id === currentRoomId) renderModeLabel(data.mode);
+  });
+
+  socket.on('dice_roll', (data) => {
+    log(`${data.user}: ${data.formula} = ${data.result} ${data.breakdown}`);
+  });
+
+  socket.on('spell_cast_effect', (data) => {
+    const dmgText = data.damage_result ? ` — урон ${data.damage_result.result} (${data.damage_result.breakdown})` : '';
+    log(`${data.user} использует «${data.action_name}»${dmgText}`);
+
+    if (data.aoe && data.aoe.shape === 'circle') {
+      const radiusPx = (data.aoe.radius / 5) * currentGridSize;
+      const flash = new Konva.Circle({
+        x: data.target_x, y: data.target_y, radius: radiusPx,
+        fill: 'rgba(216,90,48,0.35)', stroke: '#D85A30', strokeWidth: 2, listening: false,
+      });
+      previewLayer.add(flash);
+      previewLayer.draw();
+      setTimeout(() => { flash.destroy(); previewLayer.draw(); }, 1500);
+    }
+  });
+
+  socket.on('room_joined', (data) => {
+    log(`${data.username} присоединился к комнате`);
+  });
+}
+
+// --- комнаты ---
+async function createRoom() {
+  try {
+    const room = await api('/rooms', { method: 'POST', body: JSON.stringify({ name: val('new-room-name') }) });
+    await enterRoom(room.id);
+  } catch (e) { showError(e.message); }
+}
+
+async function joinRoomByCode() {
+  try {
+    const res = await api('/rooms/join', { method: 'POST', body: JSON.stringify({ invite_code: val('join-code') }) });
+    await enterRoom(res.id);
+  } catch (e) { showError(e.message); }
+}
+
+async function enterRoom(roomId) {
+  currentRoomId = roomId;
+  const room = await api(`/rooms/${roomId}`);
+  const me = await api('/auth/me');
+  currentUserId = me.id;
+  isCurrentUserGm = (room.gm_id === me.id);
+
+  document.getElementById('no-room-block').classList.add('hidden');
+  document.getElementById('in-room-block').classList.remove('hidden');
+  document.getElementById('room-name-label').textContent = room.name;
+  document.getElementById('invite-code-label').textContent = room.invite_code;
+  document.getElementById('toggle-mode-btn').disabled = !isCurrentUserGm;
+  renderModeLabel(room.mode);
+
+  socket.emit('join_room', { room_id: roomId });
+
+  document.getElementById('map-section').classList.remove('hidden');
+  await loadBattleMap();
+  await loadActionCharacterSelect();
+}
+
+function renderModeLabel(mode) {
+  const el = document.getElementById('mode-label');
+  el.textContent = mode === 'combat' ? 'БОЙ' : 'вне боя';
+  el.className = 'pill ' + (mode === 'combat' ? 'combat' : 'roleplay');
+}
+
+function toggleMode() {
+  const current = document.getElementById('mode-label').textContent === 'БОЙ' ? 'combat' : 'roleplay';
+  const next = current === 'combat' ? 'roleplay' : 'combat';
+  socket.emit('mode_change', { room_id: currentRoomId, mode: next });
+}
+
+// --- персонажи для выбора при спавне токена ---
+async function loadMyCharactersIntoSelect() {
+  const data = await api('/characters');
+  myCharacterIds = new Set(data.characters.map(c => c.id));
+  const select = document.getElementById('char-select');
+  select.innerHTML = '<option value="">— без персонажа (декорация/проп) —</option>' +
+    data.characters.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div'); d.textContent = str ?? ''; return d.innerHTML;
+}
+
+// --- боевая карта ---
+async function loadBattleMap() {
+  const data = await api(`/rooms/${currentRoomId}/battle-map`);
+  currentBattleMapId = data.id;
+  currentMapWidth = data.width;
+  currentMapHeight = data.height;
+  currentGridSize = data.grid_size;
+  initStage(data.width, data.height, data.grid_size);
+  data.objects.forEach(obj => upsertTokenNode({ ...obj, battle_map_id: currentBattleMapId }));
+}
+
+function initStage(mapWidth, mapHeight, gridSize) {
+  document.getElementById('canvas-holder').innerHTML = '';
+  // размер видимой области — фиксированный "вьюпорт", НЕ размер всей карты;
+  // сама карта может быть больше и открывается панорамированием/зумом
+  const viewportWidth = 900;
+  const viewportHeight = 600;
+
+  stage = new Konva.Stage({
+    container: 'canvas-holder',
+    width: viewportWidth,
+    height: viewportHeight,
+    draggable: true, // драг по пустому месту — панорамирование камеры
+  });
+
+  stage.on('mousemove', () => {
+    const pos = getWorldPointerPosition();
+    if (pos) lastCanvasPos = pos;
+    if (activeAction) updateActionPreview(pos);
+  });
+
+  // зум колесом мыши с точкой фиксации под курсором — стандартный рецепт
+  // Konva: getPointerPosition() отдаёт СЫРЫЕ экранные координаты, не
+  // учитывающие текущий scale/position стейджа, поэтому пересчёт вручную
+  stage.on('wheel', (e) => {
+    e.evt.preventDefault();
+    const oldScale = stage.scaleX();
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale,
+    };
+    const scaleBy = 1.05;
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    let newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy;
+    newScale = Math.max(0.2, Math.min(3, newScale));
+
+    stage.scale({ x: newScale, y: newScale });
+    stage.position({
+      x: pointer.x - mousePointTo.x * newScale,
+      y: pointer.y - mousePointTo.y * newScale,
+    });
+    stage.batchDraw();
+  });
+
+  gridLayer = new Konva.Layer();
+  backgroundLayer = new Konva.Layer();
+  stage.add(backgroundLayer);
+  // сетка рисуется на всю карту (mapWidth x mapHeight), а не только на
+  // видимый вьюпорт — иначе после панорамирования за пределами исходных
+  // 900x600 будет просто пусто
+  for (let x = 0; x <= mapWidth; x += gridSize) {
+    gridLayer.add(new Konva.Line({ points: [x, 0, x, mapHeight], stroke: '#4a443c', strokeWidth: 1 }));
+  }
+  for (let y = 0; y <= mapHeight; y += gridSize) {
+    gridLayer.add(new Konva.Line({ points: [0, y, mapWidth, y], stroke: '#4a443c', strokeWidth: 1 }));
+  }
+  stage.add(gridLayer);
+
+  tokenLayer = new Konva.Layer();
+  stage.add(tokenLayer);
+
+  transformer = new Konva.Transformer({
+    enabledAnchors: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+    boundBoxFunc: (oldBox, newBox) => {
+      if (Math.abs(newBox.width) < 20 || Math.abs(newBox.height) < 20) return oldBox;
+      return newBox;
+    },
+  });
+  tokenLayer.add(transformer);
+
+  previewLayer = new Konva.Layer();
+  stage.add(previewLayer);
+
+  // клик по карте: если идёт прицеливание — подтверждает каст в этой точке;
+  // иначе, если клик пришёлся на пустое место — снимает выделение токена
+  stage.on('click', (e) => {
+    if (activeAction) {
+      commitSpellCast(getWorldPointerPosition());
+      return;
+    }
+    if (e.target === stage) { transformer.nodes([]); selectedTokenId = null; tokenLayer.draw(); }
+  });
+
+  tokensById = {};
+}
+
+// стейдж может быть подвинут (панорамирование) и масштабирован (зум) —
+// getPointerPosition() отдаёт сырые координаты относительно контейнера,
+// без поправки на это; для позиции токена/цели каста нужны именно
+// "мировые" координаты карты, а не то, что под курсором на экране
+function getWorldPointerPosition() {
+  const pointer = stage.getPointerPosition();
+  if (!pointer) return null;
+  const scale = stage.scaleX();
+  return {
+    x: (pointer.x - stage.x()) / scale,
+    y: (pointer.y - stage.y()) / scale,
+  };
+}
+
+function selectToken(group, tokenId) {
+  transformer.nodes([group]);
+  selectedTokenId = tokenId;
+  tokenLayer.draw();
+}
+
+function resetView() {
+  stage.scale({ x: 1, y: 1 });
+  stage.position({ x: 0, y: 0 });
+  stage.batchDraw();
+}
+
+function applyTokenSize(refs, width, height) {
+  if (!refs.shape) return;
+  if (refs.shape instanceof Konva.Image) {
+    refs.shape.setAttrs({ width, height, offsetX: width / 2, offsetY: height / 2 });
+  } else {
+    refs.shape.radius((width + height) / 4);
+  }
+  refs.nameText.width(width);
+  refs.nameText.offsetX(width / 2);
+  refs.hpText.width(width);
+  refs.hpText.offsetX(width / 2);
+}
+
+function upsertTokenNode(obj) {
+  if (obj.layer === 0) {
+    renderBackground(obj);
+    return;
+  }
+
+  // предварительная (не финальная — сервер всё равно перепроверит) оценка
+  // прав. Для токенов без character_id (пропсы, картинки из Ctrl+V)
+  // право двигать — у того, кто их создал (created_by_user_id), не у
+  // владельца персонажа, потому что персонажа тут просто нет.
+  const canMove = isCurrentUserGm ||
+    (!obj.locked && (
+      (obj.character_id && myCharacterIds.has(obj.character_id)) ||
+      (!obj.character_id && obj.created_by_user_id === currentUserId)
+    ));
+
+  const group = new Konva.Group({
+    x: obj.pos_x, y: obj.pos_y, rotation: obj.rotation || 0,
+    draggable: canMove,
+  });
+
+  // refs — по этому объекту потом обновляем размер после ресайза
+  // (Transformer меняет scaleX/scaleY, а не width/height напрямую, поэтому
+  // после ресайза "запекаем" масштаб в реальные размеры дочерних фигур)
+  const refs = { group, shape: null, nameText: null, hpText: null };
+
+  if (obj.image_url) {
+    const placeholder = new Konva.Circle({
+      radius: (obj.width || 50) / 2, fill: '#35302a', stroke: '#1c1a17', strokeWidth: 2,
+    });
+    group.add(placeholder);
+    refs.shape = placeholder;
+    Konva.Image.fromURL(obj.image_url, (imgNode) => {
+      imgNode.setAttrs({
+        width: obj.width || 50, height: obj.height || 50,
+        offsetX: (obj.width || 50) / 2, offsetY: (obj.height || 50) / 2,
+      });
+      placeholder.destroy();
+      group.add(imgNode);
+      imgNode.moveToBottom();
+      refs.shape = imgNode;
+      tokenLayer.draw();
+    });
+  } else {
+    const color = obj.is_instance ? '#b5453a' : '#c9822f';
+    const circle = new Konva.Circle({
+      radius: (obj.width || 50) / 2, fill: color, stroke: '#1c1a17', strokeWidth: 2,
+    });
+    group.add(circle);
+    refs.shape = circle;
+  }
+
+  const nameText = new Konva.Text({
+    text: obj.label || `#${obj.character_id ?? obj.id}`,
+    fontSize: 11, fill: 'white', width: obj.width || 50, align: 'center',
+    y: -6, offsetX: (obj.width || 50) / 2,
+  });
+  group.add(nameText);
+  refs.nameText = nameText;
+
+  const hpText = new Konva.Text({
+    text: obj.hp_current != null ? `HP ${obj.hp_current}` : '',
+    fontSize: 10, fill: '#e8e2d5', width: obj.width || 50, align: 'center',
+    y: 6, offsetX: (obj.width || 50) / 2,
+  });
+  group.add(hpText);
+  refs.hpText = hpText;
+
+  const throttledLive = throttle((x, y) => {
+    socket.emit('token_transform_live', { room_id: currentRoomId, token_id: obj.id, pos_x: x, pos_y: y });
+  }, 50);
+
+  let wasDragging = false;
+  group.on('dragmove', () => {
+    wasDragging = true;
+    throttledLive(group.x(), group.y());
+  });
+  group.on('dragend', () => {
+    socket.emit('token_transform_commit', {
+      room_id: currentRoomId, token_id: obj.id, pos_x: group.x(), pos_y: group.y(),
+    });
+    // клик срабатывает сразу после dragend — гасим один следующий клик,
+    // чтобы отпускание мыши после драга не открывало заодно и промпт урона
+    setTimeout(() => { wasDragging = false; }, 0);
+  });
+
+  // клик выделяет токен (показывает ручки Transformer, если есть права),
+  // двойной клик — задать HP. Разные жесты специально, иначе не разделить
+  // "хочу подвинуть/повернуть" и "хочу нанести урон" одним и тем же кликом.
+  group.on('click', () => {
+    if (wasDragging) return;
+    if (activeAction) return; // приоритет у прицеливания — клик обработает stage как каст
+    if (canMove) selectToken(group, obj.id);
+  });
+  group.on('dblclick', () => {
+    if (wasDragging) return;
+    promptDamage(obj.id);
+  });
+
+  group.on('transformend', () => {
+    const scaleX = group.scaleX(), scaleY = group.scaleY();
+    const newWidth = Math.max(10, Math.round((obj.width || 50) * scaleX));
+    const newHeight = Math.max(10, Math.round((obj.height || 50) * scaleY));
+    // сбрасываем scale к 1 и переносим масштаб в реальные width/height —
+    // иначе следующий ресайз считался бы от уже накопленного масштаба
+    group.scaleX(1);
+    group.scaleY(1);
+    obj.width = newWidth;
+    obj.height = newHeight;
+    applyTokenSize(refs, newWidth, newHeight);
+
+    socket.emit('token_transform_commit', {
+      room_id: currentRoomId, token_id: obj.id,
+      pos_x: group.x(), pos_y: group.y(), rotation: group.rotation(),
+      width: newWidth, height: newHeight,
+    });
+  });
+
+  tokenLayer.add(group);
+  tokensById[obj.id] = refs;
+  tokenDataById[obj.id] = { pos_x: obj.pos_x, pos_y: obj.pos_y, character_id: obj.character_id };
+  tokenLayer.draw();
+}
+
+function renderBackground(obj) {
+  if (!obj.image_url) return;
+  Konva.Image.fromURL(obj.image_url, (imgNode) => {
+    imgNode.setAttrs({
+      x: obj.pos_x, y: obj.pos_y,
+      width: obj.width || currentMapWidth, height: obj.height || currentMapHeight,
+      listening: false, // фон не перехватывает клики токенов поверх себя
+    });
+    backgroundLayer.add(imgNode);
+    backgroundLayer.draw();
+  });
+}
+
+function promptDamage(tokenId) {
+  const value = prompt('Новое значение HP:');
+  if (value === null) return;
+  const hp = parseInt(value);
+  if (isNaN(hp) || hp < 0) return showError('Некорректное значение HP');
+  socket.emit('token_update_state', { room_id: currentRoomId, token_id: tokenId, patch: { hp_current: hp } });
+}
+
+async function uploadImageIfSelected() {
+  const fileInput = document.getElementById('token-image');
+  if (!fileInput.files.length) return null;
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  const resp = await fetch(`${API}/rooms/${currentRoomId}/images`, {
+    method: 'POST', credentials: 'include', body: formData,
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  fileInput.value = '';
+  return data.url;
+}
+
+async function addToken() {
+  const characterId = val('char-select');
+  const isBackground = document.getElementById('as-background-check').checked;
+  let imageUrl = null;
+  try {
+    imageUrl = await uploadImageIfSelected();
+  } catch (e) {
+    return showError('Не удалось загрузить картинку: ' + e.message);
+  }
+
+  socket.emit('token_add', {
+    room_id: currentRoomId,
+    battle_map_id: currentBattleMapId,
+    character_id: characterId ? parseInt(characterId) : null,
+    as_instance: document.getElementById('as-instance-check').checked,
+    visible_to_players: document.getElementById('visible-check').checked,
+    label: val('token-label') || null,
+    image_url: imageUrl,
+    pos_x: isBackground ? 0 : (parseInt(val('token-x')) || 0),
+    pos_y: isBackground ? 0 : (parseInt(val('token-y')) || 0),
+    width: isBackground ? currentMapWidth : 50,
+    height: isBackground ? currentMapHeight : 50,
+    layer: isBackground ? 0 : 10,
+    locked: isBackground,
+  });
+}
+
+// --- кубики ---
+function rollDice() {
+  socket.emit('dice_roll', { room_id: currentRoomId, formula: val('dice-formula') });
+}
+
+// --- вставка картинки из буфера обмена (Ctrl+V), как в Owlbear Rodeo ---
+function getImageDimensions(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Не удалось прочитать картинку')); };
+    img.src = url;
+  });
+}
+
+async function pasteImageAsToken(blob) {
+  try {
+    const dims = await getImageDimensions(blob);
+    const MAX_SIZE = 200; // вставленная картинка не должна сразу занимать полкарты
+    const scale = Math.min(1, MAX_SIZE / Math.max(dims.width, dims.height));
+    const width = Math.round(dims.width * scale);
+    const height = Math.round(dims.height * scale);
+
+    const formData = new FormData();
+    formData.append('file', blob, 'pasted.png');
+    const resp = await fetch(`${API}/rooms/${currentRoomId}/images`, {
+      method: 'POST', credentials: 'include', body: formData,
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+
+    socket.emit('token_add', {
+      room_id: currentRoomId,
+      battle_map_id: currentBattleMapId,
+      character_id: null,
+      as_instance: false,
+      visible_to_players: true,
+      image_url: data.url,
+      pos_x: lastCanvasPos.x,
+      pos_y: lastCanvasPos.y,
+      width, height,
+      layer: 10,
+    });
+  } catch (e) {
+    showError('Не удалось вставить картинку: ' + e.message);
+  }
+}
+
+// --- хотбар действий и прицеливание заклинаний ---
+async function loadActionCharacterSelect() {
+  const data = await api('/characters');
+  const select = document.getElementById('action-character-select');
+  select.innerHTML = data.characters.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  if (data.characters.length) await renderActionBar(parseInt(select.value));
+}
+
+async function renderActionBar(characterId) {
+  cancelTargeting();
+  if (!characterId) return;
+  activeCasterCharacterId = characterId;
+
+  const data = await api(`/characters/${characterId}`);
+  const actions = (data.sheet_data.actions || []).filter(a => a.id && (a.type === 'attack' || a.type === 'spell'));
+  currentActionsById = Object.fromEntries(actions.map(a => [a.id, a]));
+
+  const bar = document.getElementById('action-bar');
+  bar.innerHTML = actions.length
+    ? actions.map(a => `<button class="secondary" onclick="selectAction('${a.id}')">${escapeHtml(a.name)}</button>`).join('')
+    : '<span style="font-size:12px;color:var(--text-dim)">нет атак/заклинаний с непустым id</span>';
+}
+
+function selectAction(actionId) {
+  const action = currentActionsById[actionId];
+  if (!action) return;
+  activeAction = action;
+  updateActionPreview(lastCanvasPos);
+}
+
+function cancelTargeting() {
+  activeAction = null;
+  if (previewLayer) { previewLayer.destroyChildren(); previewLayer.draw(); }
+}
+
+function findCasterToken(characterId) {
+  return Object.values(tokenDataById).find(t => t.character_id === characterId) || null;
+}
+
+function updateActionPreview(pos) {
+  if (!pos || !activeAction) return;
+  previewLayer.destroyChildren();
+
+  const casterToken = findCasterToken(activeCasterCharacterId);
+
+  if (casterToken && activeAction.range) {
+    const rangePx = (activeAction.range / 5) * currentGridSize;
+    previewLayer.add(new Konva.Circle({
+      x: casterToken.pos_x, y: casterToken.pos_y, radius: rangePx,
+      stroke: '#a89e8c', strokeWidth: 1, dash: [4, 6], listening: false,
+    }));
+  }
+
+  let inRange = true;
+  if (casterToken && activeAction.range) {
+    const dx = pos.x - casterToken.pos_x, dy = pos.y - casterToken.pos_y;
+    const distFt = (Math.max(Math.abs(dx), Math.abs(dy)) / currentGridSize) * 5;
+    inRange = distFt <= activeAction.range;
+  }
+
+  if (activeAction.aoe && activeAction.aoe.shape === 'circle') {
+    const radiusPx = (activeAction.aoe.radius / 5) * currentGridSize;
+    previewLayer.add(new Konva.Circle({
+      x: pos.x, y: pos.y, radius: radiusPx,
+      fill: inRange ? 'rgba(216,90,48,0.2)' : 'rgba(136,136,136,0.15)',
+      stroke: inRange ? '#D85A30' : '#888', strokeWidth: 1.5, dash: [6, 4], listening: false,
+    }));
+  } else {
+    previewLayer.add(new Konva.Circle({
+      x: pos.x, y: pos.y, radius: 6,
+      fill: inRange ? '#c9822f' : '#888', listening: false,
+    }));
+  }
+  previewLayer.draw();
+}
+
+function commitSpellCast(pos) {
+  if (!pos || !activeAction) return;
+  socket.emit('spell_cast', {
+    room_id: currentRoomId,
+    character_id: activeCasterCharacterId,
+    action_id: activeAction.id,
+    target_x: pos.x, target_y: pos.y,
+  });
+  cancelTargeting();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && activeAction) { cancelTargeting(); return; }
+
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const active = document.activeElement;
+  const isEditingField = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+  if (isEditingField) return;
+  if (!selectedTokenId) return;
+  e.preventDefault();
+  if (!confirm('Удалить токен с карты?')) return;
+  socket.emit('token_remove', { room_id: currentRoomId, token_id: selectedTokenId });
+});
+
+document.addEventListener('paste', (e) => {
+  const active = document.activeElement;
+  const isEditingField = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+  if (isEditingField) return; // не мешаем обычной вставке текста в поля форм
+  if (!currentBattleMapId) return; // ещё не в комнате — вставлять некуда
+
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const imageItem = [...items].find(i => i.type.startsWith('image/'));
+  if (!imageItem) return;
+
+  e.preventDefault();
+  pasteImageAsToken(imageItem.getAsFile());
+});
+
+// если уже залогинены — сразу продолжаем
+api('/auth/me').then(afterLogin).catch(() => {});
+</script>
+</body>
+</html>

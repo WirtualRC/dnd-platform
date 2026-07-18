@@ -4,7 +4,7 @@ from flask_socketio import emit, join_room as sio_join_room, leave_room as sio_l
 from ..extensions import db, socketio
 from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap
 from ..utils.dice import roll, InvalidDiceFormula
-from ..utils.permissions import is_character_in_room, is_gm, is_character_owner
+from ..utils.permissions import is_gm, is_character_owner
 
 
 def _is_member(room_id: int, user_id: int) -> bool:
@@ -51,10 +51,12 @@ def handle_dice_roll(data):
         emit('error', {'message': 'Вы не участник этой комнаты'})
         return
 
-    # если бросок привязывают к персонажу — проверяем, что персонаж
-    # действительно в этой комнате, а не подставлен чужой char_id
-    if character_id is not None and not is_character_in_room(character_id, room_id):
-        emit('error', {'message': 'Персонаж не привязан к этой комнате'})
+    # право подписать бросок персонажем — владение персонажем (или GM,
+    # который может кидать за NPC/монстров), то же правило, что и у токенов.
+    # CharacterRoomLink здесь сознательно не проверяется — это не про "можно
+    # ли действовать", а про то, что показывать GM в ростере комнаты вне боя.
+    if character_id is not None and not (is_character_owner(character_id, current_user.id) or is_gm(room_id, current_user.id)):
+        emit('error', {'message': 'Нельзя подписывать бросок чужим персонажем'})
         return
 
     try:
@@ -162,6 +164,7 @@ def handle_token_add(data):
         battle_map_id=battle_map_id,
         character_id=character.id if character else None,
         instance_data=dict(character.sheet_data) if (character and as_instance) else None,
+        created_by_user_id=current_user.id,
         label=data.get('label'),
         image_url=data.get('image_url') or (character.avatar_url if character else None),
         pos_x=data.get('pos_x', 0),
@@ -180,6 +183,7 @@ def handle_token_add(data):
         'id': token.id,
         'battle_map_id': token.battle_map_id,
         'character_id': token.character_id,
+        'created_by_user_id': token.created_by_user_id,
         'label': token.label,
         'image_url': token.image_url,
         'pos_x': token.pos_x,
@@ -194,18 +198,127 @@ def handle_token_add(data):
     }, room=str(room_id))
 
 
-@socketio.on('token_apply_damage')
-def handle_apply_damage(data):
-    """Меняет hp_current конкретного токена.
+@socketio.on('token_update_state')
+def handle_update_state(data):
+    """Обновляет боевое состояние токена — HP и в будущем состояния/заряды
+    ресурсов — ОДНИМ событием вместо отдельного на каждый стат.
 
-    Ключевой момент: пишем либо в token.instance_data (если это клон —
-    саммон/монстр), либо напрямую в character.sheet_data (если это живой
-    токен персонажа 1:1). Какой из двух — решает наличие instance_data у
-    самого токена, а не что-то, что нужно передавать заново с фронтенда.
+    Специально не объединено с token_transform_* (позиция/поворот): та
+    пара нужна именно из-за троттлинга на каждый кадр драга, а это —
+    редкие, всегда мгновенно коммитящиеся изменения с одинаковыми правами
+    (GM или владелец персонажа), так что им один общий event подходит.
+
+    patch — частичный словарь, мержится в раздел vitality:
+        {"hp_current": 3}
+        {"hp_current": 3, "hp_temp": 0}
+    Когда появятся состояния/ресурсы — либо расширить ALLOWED_VITALITY_KEYS,
+    либо завести соседний top-level раздел в data (например "conditions")
+    по той же схеме, не заводя новый socket-event.
     """
+    ALLOWED_VITALITY_KEYS = {'hp_current', 'hp_temp'}
+
     room_id = data.get('room_id')
     token_id = data.get('token_id')
-    new_hp = data.get('hp_current')
+    patch = data.get('patch') or {}
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    if not patch or not set(patch.keys()) <= ALLOWED_VITALITY_KEYS:
+        emit('error', {'message': f'Патч может содержать только поля {ALLOWED_VITALITY_KEYS}'})
+        return
+    if any(not isinstance(v, int) or v < 0 for v in patch.values()):
+        emit('error', {'message': 'Значения HP должны быть неотрицательными целыми числами'})
+        return
+
+    token = Token.query.get(token_id)
+    if not token or token.battle_map.room_id != room_id:
+        emit('error', {'message': 'Токен не найден в этой комнате'})
+        return
+
+    is_owner = token.character_id is not None and is_character_owner(token.character_id, current_user.id)
+    if not (is_gm(room_id, current_user.id) or is_owner):
+        emit('error', {'message': 'Недостаточно прав менять состояние этого токена'})
+        return
+
+    if token.instance_data is not None:
+        # клонированный экземпляр — правим только его личную копию
+        new_data = dict(token.instance_data)
+        new_data['vitality'] = {**new_data.get('vitality', {}), **patch}
+        token.instance_data = new_data
+    elif token.character_id is not None:
+        # обычный токен 1:1 — правим напрямую в листе персонажа
+        character = Character.query.get(token.character_id)
+        new_data = dict(character.sheet_data)
+        new_data['vitality'] = {**new_data.get('vitality', {}), **patch}
+        character.sheet_data = new_data
+    else:
+        emit('error', {'message': 'У токена нет данных персонажа для отслеживания состояния'})
+        return
+
+    db.session.commit()
+
+    emit('token_state_changed', {
+        'token_id': token.id,
+        'vitality_patch': patch,
+    }, room=str(room_id))
+
+
+def _can_move_token(token, room_id: int, user_id: int) -> bool:
+    """Кто имеет право двигать конкретный токен.
+
+    locked=True — трогать может только GM. С character_id — GM или
+    владелец персонажа. Без character_id (пропсы, картинки из Ctrl+V) —
+    GM или тот, кто конкретно ЭТОТ токен создал (created_by_user_id)."""
+    if token.locked:
+        return is_gm(room_id, user_id)
+    if is_gm(room_id, user_id):
+        return True
+    if token.character_id is not None:
+        return is_character_owner(token.character_id, user_id)
+    return token.created_by_user_id == user_id
+
+
+@socketio.on('token_transform_live')
+def handle_token_transform_live(data):
+    """Высокочастотное событие во время драга — НИКОГДА не пишет в БД,
+    только ретранслирует позицию остальным участникам комнаты.
+    Намеренно тихо игнорирует некорректные вызовы без emit('error', ...):
+    на каждый кадр драга слать ошибку было бы спамом, а ценность
+    отдельного кадра всё равно нулевая уже к следующему кадру."""
+    room_id = data.get('room_id')
+    token_id = data.get('token_id')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        return
+
+    token = Token.query.get(token_id)
+    if not token or token.battle_map.room_id != room_id:
+        return
+
+    if not _can_move_token(token, room_id, current_user.id):
+        return
+
+    # include_self=False: у отправителя уже есть локальное оптимистичное
+    # положение курсора, дублировать его самому себе незачем
+    emit('token_moved_live', {
+        'token_id': token_id,
+        'pos_x': data.get('pos_x'),
+        'pos_y': data.get('pos_y'),
+    }, room=str(room_id), include_self=False)
+
+
+@socketio.on('token_transform_commit')
+def handle_token_transform_commit(data):
+    """Одна запись в БД на весь драг/ресайз/поворот — вызывается на отпускание."""
+    room_id = data.get('room_id')
+    token_id = data.get('token_id')
+    pos_x = data.get('pos_x')
+    pos_y = data.get('pos_y')
+    rotation = data.get('rotation')
+    width = data.get('width')
+    height = data.get('height')
 
     if not room_id or not _is_member(room_id, current_user.id):
         emit('error', {'message': 'Вы не участник этой комнаты'})
@@ -216,33 +329,152 @@ def handle_apply_damage(data):
         emit('error', {'message': 'Токен не найден в этой комнате'})
         return
 
-    is_owner = token.character_id is not None and is_character_owner(token.character_id, current_user.id)
-    if not (is_gm(room_id, current_user.id) or is_owner):
-        emit('error', {'message': 'Недостаточно прав менять HP этого токена'})
+    if not _can_move_token(token, room_id, current_user.id):
+        emit('error', {'message': 'Недостаточно прав перемещать этот токен'})
         return
 
-    if not isinstance(new_hp, int) or new_hp < 0:
-        emit('error', {'message': 'Некорректное значение HP'})
+    if not isinstance(pos_x, (int, float)) or not isinstance(pos_y, (int, float)):
+        emit('error', {'message': 'Некорректные координаты'})
         return
 
-    if token.instance_data is not None:
-        # клонированный экземпляр — правим только его личную копию
-        new_data = dict(token.instance_data)
-        new_data['vitality'] = {**new_data.get('vitality', {}), 'hp_current': new_hp}
-        token.instance_data = new_data
-    elif token.character_id is not None:
-        # обычный токен 1:1 — правим напрямую в листе персонажа
-        character = Character.query.get(token.character_id)
-        new_data = dict(character.sheet_data)
-        new_data['vitality'] = {**new_data.get('vitality', {}), 'hp_current': new_hp}
-        character.sheet_data = new_data
-    else:
-        emit('error', {'message': 'У токена нет данных персонажа для отслеживания HP'})
-        return
+    battle_map = token.battle_map
+    token.pos_x = max(0, min(float(pos_x), battle_map.width))
+    token.pos_y = max(0, min(float(pos_y), battle_map.height))
+
+    if rotation is not None:
+        if not isinstance(rotation, (int, float)):
+            emit('error', {'message': 'Некорректный угол поворота'})
+            return
+        token.rotation = float(rotation) % 360
+
+    # ресайз — оба поля опциональны, но если переданы, должны быть в
+    # разумных пределах: не меньше 10px (не превратить токен в невидимую
+    # точку) и не больше 2000px (не растянуть на всю карту случайным
+    # драгом угла на порядок больше, чем размер самой карты)
+    for field_name, value in (('width', width), ('height', height)):
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or not (10 <= value <= 2000):
+            emit('error', {'message': f'Некорректный размер токена ({field_name})'})
+            return
+    if width is not None:
+        token.width = float(width)
+    if height is not None:
+        token.height = float(height)
 
     db.session.commit()
 
-    emit('token_hp_changed', {
+    emit('token_moved_committed', {
         'token_id': token.id,
-        'hp_current': new_hp,
+        'pos_x': token.pos_x,
+        'pos_y': token.pos_y,
+        'rotation': token.rotation,
+        'width': token.width,
+        'height': token.height,
     }, room=str(room_id))
+
+
+@socketio.on('token_remove')
+def handle_token_remove(data):
+    """Удаление токена с карты. Права те же, что на перемещение — кто
+    может двигать токен, тот может его и убрать: GM всегда, владелец
+    персонажа — свой токен, создатель пропса без персонажа — свой пропс."""
+    room_id = data.get('room_id')
+    token_id = data.get('token_id')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    token = Token.query.get(token_id)
+    if not token or token.battle_map.room_id != room_id:
+        emit('error', {'message': 'Токен не найден в этой комнате'})
+        return
+
+    if not _can_move_token(token, room_id, current_user.id):
+        emit('error', {'message': 'Недостаточно прав удалить этот токен'})
+        return
+
+    db.session.delete(token)
+    db.session.commit()
+
+    emit('token_removed', {'token_id': token_id}, room=str(room_id))
+
+
+@socketio.on('spell_cast')
+def handle_spell_cast(data):
+    """Каст действия из sheet_data.actions персонажа.
+
+    Никакого справочника заклинаний нет — action целиком берётся из
+    актуального листа персонажа по id, который сам персонаж и хранит.
+    Если у действия есть damage-формула — кидаем её тем же roll(), что и
+    обычный dice_roll, и пишем в тот же DiceRoll (это то же самое действие,
+    просто инициированное кастом, а не кнопкой "бросить"). Разрешение
+    попаданий/спасбросков по целям — вне охвата этого черновика, просто
+    визуальная вспышка области поражения для всех в комнате."""
+    room_id = data.get('room_id')
+    character_id = data.get('character_id')
+    action_id = data.get('action_id')
+    target_x = data.get('target_x')
+    target_y = data.get('target_y')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    if not (is_character_owner(character_id, current_user.id) or is_gm(room_id, current_user.id)):
+        emit('error', {'message': 'Нельзя кастовать чужим персонажем'})
+        return
+
+    if not isinstance(target_x, (int, float)) or not isinstance(target_y, (int, float)):
+        emit('error', {'message': 'Некорректная точка цели'})
+        return
+
+    character = Character.query.get(character_id)
+    if not character:
+        emit('error', {'message': 'Персонаж не найден'})
+        return
+
+    action = next(
+        (a for a in character.sheet_data.get('actions', []) if a.get('id') == action_id),
+        None,
+    )
+    if not action:
+        emit('error', {'message': 'Действие не найдено в листе персонажа'})
+        return
+
+    payload = {
+        'room_id': room_id,
+        'user': current_user.username,
+        'character_id': character_id,
+        'action_name': action.get('name'),
+        'target_x': target_x,
+        'target_y': target_y,
+        'aoe': action.get('aoe') or None,
+    }
+
+    damage_formula = action.get('damage')
+    if isinstance(damage_formula, str) and damage_formula:
+        try:
+            result = roll(damage_formula)
+        except InvalidDiceFormula:
+            # формула вроде "special" (см. контрзаклинание) — не ошибка,
+            # просто нечего катить, эффект всё равно показываем
+            pass
+        else:
+            dice_roll = DiceRoll(
+                room_id=room_id, user_id=current_user.id, character_id=character_id,
+                formula=result.formula, result=result.total, breakdown=result.breakdown,
+            )
+            db.session.add(dice_roll)
+            db.session.commit()
+            payload['damage_result'] = {
+                'formula': result.formula, 'result': result.total, 'breakdown': result.breakdown,
+            }
+            emit('dice_roll', {
+                'id': dice_roll.id, 'user': current_user.username, 'character_id': character_id,
+                'formula': result.formula, 'result': result.total, 'breakdown': result.breakdown,
+                'created_at': dice_roll.created_at.isoformat(),
+            }, room=str(room_id))
+
+    emit('spell_cast_effect', payload, room=str(room_id))

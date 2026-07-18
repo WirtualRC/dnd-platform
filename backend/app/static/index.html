@@ -71,7 +71,10 @@
 <div id="main-screen" class="hidden">
   <div class="top-bar">
     <h1>Мои персонажи (<span id="whoami"></span>)</h1>
-    <button class="secondary" onclick="doLogout()">Выйти</button>
+    <div style="display:flex;gap:12px;align-items:center">
+      <a href="/battlemap" style="color:var(--accent);font-size:13px">боевая карта →</a>
+      <button class="secondary" onclick="doLogout()">Выйти</button>
+    </div>
   </div>
 
   <div id="char-list" class="card"></div>
@@ -257,11 +260,18 @@ function buildSkillsList() {
     </div>`).join('');
 }
 
+function generateActionId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'a' + Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
 function addAction(action = {}) {
   const list = document.getElementById('actions-list');
-  const idx = list.children.length;
   const row = document.createElement('div');
   row.className = 'row action-row';
+  // id генерируется один раз при добавлении строки и живёт в dataset —
+  // без него хотбар на боевой карте не может показать это действие вообще
+  row.dataset.actionId = action.id || generateActionId();
   row.innerHTML = `
     <input placeholder="название" class="a-name" value="${escapeHtml(action.name || '')}">
     <select class="a-type" style="max-width:120px">
@@ -269,7 +279,8 @@ function addAction(action = {}) {
       <option value="spell" ${action.type === 'spell' ? 'selected' : ''}>заклинание</option>
     </select>
     <input placeholder="урон (2d6+3)" class="a-damage" style="max-width:120px" value="${escapeHtml(action.damage || '')}">
-    <input placeholder="радиус, фт" class="a-radius" type="number" style="max-width:100px" value="${action.aoe?.radius_ft ?? ''}">
+    <input placeholder="дальность, фт" class="a-range" type="number" style="max-width:100px" value="${action.range ?? ''}">
+    <input placeholder="радиус AoE, фт" class="a-radius" type="number" style="max-width:100px" value="${action.aoe?.radius ?? action.aoe?.radius_ft ?? ''}">
     <button class="secondary" onclick="this.parentElement.remove()">✕</button>`;
   list.appendChild(row);
 }
@@ -277,11 +288,14 @@ function addAction(action = {}) {
 function collectActions() {
   return [...document.querySelectorAll('.action-row')].map(row => {
     const radius = row.querySelector('.a-radius').value;
+    const range = row.querySelector('.a-range').value;
     return {
+      id: row.dataset.actionId,
       name: row.querySelector('.a-name').value,
       type: row.querySelector('.a-type').value,
       damage: row.querySelector('.a-damage').value,
-      ...(radius ? { aoe: { shape: 'circle', radius_ft: parseInt(radius) } } : {})
+      ...(range ? { range: parseInt(range) } : {}),
+      ...(radius ? { aoe: { shape: 'circle', radius: parseInt(radius) } } : {}),
     };
   });
 }

@@ -23,6 +23,27 @@ def create_app(config_name: str = None) -> Flask:
     def unauthorized():
         return jsonify({"error": "Authentication required"}), 401
 
+    # API-бэкенд: любая стандартная HTTP-ошибка (в первую очередь 404 от
+    # get_or_404()) должна возвращать JSON, а не дефолтную HTML-страницу
+    # Werkzeug — иначе фронтенд получит текст вместо ожидаемого {"error": ...}
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({"error": "Not found"}), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(e):
+        return jsonify({"error": "Method not allowed"}), 405
+
+    @app.errorhandler(413)
+    def payload_too_large(e):
+        return jsonify({"error": "File too large"}), 413
+
+    @app.route('/uploads/<path:filepath>')
+    def uploaded_file(filepath):
+        # send_from_directory сам защищает от path traversal (".."),
+        # отклоняя такие пути ещё до похода на диск
+        return send_from_directory(app.config['UPLOAD_DIR'], filepath)
+
     @login_manager.user_loader
     def load_user(user_id: str):
         from .models import User
@@ -41,6 +62,10 @@ def create_app(config_name: str = None) -> Flask:
     @app.route('/')
     def index():
         return send_from_directory(app.static_folder, 'index.html')
+
+    @app.route('/battlemap')
+    def battlemap_page():
+        return send_from_directory(app.static_folder, 'battlemap.html')
 
     with app.app_context():
         from . import models

@@ -1,26 +1,37 @@
-import os
 import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from ..extensions import db
-from ..models import Room, RoomMembership, RoomRole, RoomMode, Character, BattleMap, Token
-# from ..utils.permissions import require_gm
+from ..models import Room, RoomMembership, RoomRole, BattleMap, CharacterRoomLink
+from ..utils.permissions import is_gm, require_character_owner_or_gm
 
 rooms_bp = Blueprint('rooms', __name__)
 
 
-# ============================================================================
-# КОМНАТЫ
-# ============================================================================
+@rooms_bp.route('', methods=['GET'])
+@login_required
+def get_my_rooms():
+    """Список комнат, в которых состоит текущий пользователь."""
+    memberships = RoomMembership.query.filter_by(user_id=current_user.id).all()
+    rooms = [{
+        "id": m.room.id,
+        "name": m.room.name,
+        "invite_code": m.room.invite_code,
+        "mode": m.room.mode.value,
+        "role": m.role.value,
+        "gm_id": m.room.gm_id,
+    } for m in memberships]
+    return jsonify({"rooms": rooms}), 200
+
 
 @rooms_bp.route('', methods=['POST'])
 @login_required
 def create_room():
-    """Создание новой комнаты. Текущий пользователь автоматически становится GM."""
+    """Создание комнаты. Текущий пользователь становится GM."""
     data = request.get_json()
     if not data or not data.get('name'):
         return jsonify({"error": "Room name is required"}), 400
@@ -29,18 +40,13 @@ def create_room():
     if len(room_name) > 100:
         return jsonify({"error": "Room name too long"}), 400
 
-    # Создаем комнату
     new_room = Room(name=room_name, gm_id=current_user.id)
     db.session.add(new_room)
-    db.session.flush()  # Получаем ID комнаты, но еще не коммитим
+    db.session.flush()
 
-    # Добавляем создателя как GM
     membership = RoomMembership(room_id=new_room.id, user_id=current_user.id, role=RoomRole.GM)
     db.session.add(membership)
-
-    # Создаем пустую боевую карту для комнаты
-    battle_map = BattleMap(room_id=new_room.id)
-    db.session.add(battle_map)
+    db.session.add(BattleMap(room_id=new_room.id))
 
     try:
         db.session.commit()
@@ -50,39 +56,29 @@ def create_room():
         return jsonify({"error": "Failed to create room"}), 500
 
     return jsonify({
-        "message": "Room created successfully",
-        "room": {
-            "id": new_room.id,
-            "name": new_room.name,
-            "invite_code": new_room.invite_code,
-            "mode": new_room.mode.value
-        }
+        "id": new_room.id,
+        "name": new_room.name,
+        "invite_code": new_room.invite_code,
+        "mode": new_room.mode.value,
     }), 201
 
 
 @rooms_bp.route('/join', methods=['POST'])
 @login_required
-def join_room():
-    """Вход в комнату по invite_code."""
+def join_room_by_code():
     data = request.get_json()
     if not data or not data.get('invite_code'):
         return jsonify({"error": "Invite code is required"}), 400
 
     invite_code = data['invite_code'].strip().upper()
-
-    # Ищем комнату по коду
     room = Room.query.filter_by(invite_code=invite_code).first()
     if not room:
         return jsonify({"error": "Invalid invite code"}), 404
 
-    # Проверяем, не состоит ли уже пользователь в комнате
-    existing_membership = RoomMembership.query.filter_by(
-        room_id=room.id, user_id=current_user.id
-    ).first()
-    if existing_membership:
-        return jsonify({"message": "Already a member of this room", "room_id": room.id}), 200
+    existing = RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first()
+    if existing:
+        return jsonify({"id": room.id, "name": room.name, "already_member": True}), 200
 
-    # Добавляем пользователя как игрока
     membership = RoomMembership(room_id=room.id, user_id=current_user.id, role=RoomRole.PLAYER)
     db.session.add(membership)
 
@@ -93,45 +89,83 @@ def join_room():
         current_app.logger.error(f"Error joining room: {e}")
         return jsonify({"error": "Failed to join room"}), 500
 
-    return jsonify({
-        "message": "Joined room successfully",
-        "room": {
-            "id": room.id,
-            "name": room.name,
-            "invite_code": room.invite_code,
-            "mode": room.mode.value
-        }
-    }), 200
+    return jsonify({"id": room.id, "name": room.name, "already_member": False}), 200
 
 
 @rooms_bp.route('/<int:room_id>', methods=['GET'])
 @login_required
 def get_room(room_id):
-    """Получение информации о комнате."""
     room = Room.query.get_or_404(room_id)
 
-    # Проверяем, что пользователь состоит в комнате
-    membership = RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first()
-    if not membership:
+    if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
 
-    # Собираем список участников
-    members = []
-    for m in room.memberships:
-        members.append({
-            "user_id": m.user.id,
-            "username": m.user.username,
-            "role": m.role.value
-        })
-
+    members = [
+        {"user_id": m.user.id, "username": m.user.username, "role": m.role.value}
+        for m in room.memberships
+    ]
     return jsonify({
         "id": room.id,
         "name": room.name,
         "invite_code": room.invite_code,
         "mode": room.mode.value,
         "gm_id": room.gm_id,
-        "members": members
+        "members": members,
     }), 200
+
+
+@rooms_bp.route('/<int:room_id>/characters/<int:char_id>/assign', methods=['POST'])
+@require_character_owner_or_gm
+def assign_character_to_room(room_id, char_id):
+    """Привязать персонажа к комнате (через CharacterRoomLink, многие-ко-многим).
+
+    require_character_owner_or_gm пропустит либо владельца персонажа, либо
+    GM — но GM тут по факту не сработает: is_character_in_room до создания
+    связи всегда False, так что декоратор пропустит только владельца. Это
+    осознанно: назначить своего персонажа в игру — действие самого игрока,
+    GM может только (позже) убрать persona из комнаты, не добавить чужого
+    без ведома владельца.
+
+    Дополнительно (декоратор этого не проверяет): владелец должен сам
+    состоять в комнате — иначе можно было бы приписать своего персонажа
+    в чужую комнату, ни разу не зайдя в неё по инвайт-коду.
+    """
+    if not RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first():
+        return jsonify({"error": "Сначала нужно войти в комнату по коду приглашения"}), 403
+
+    if CharacterRoomLink.query.filter_by(character_id=char_id, room_id=room_id).first():
+        return jsonify({"message": "Персонаж уже привязан к этой комнате"}), 200
+
+    link = CharacterRoomLink(character_id=char_id, room_id=room_id)
+    db.session.add(link)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error assigning character: {e}")
+        return jsonify({"error": "Failed to assign character"}), 500
+
+    return jsonify({"message": "Character assigned to room successfully", "character_id": char_id, "room_id": room_id}), 201
+
+
+@rooms_bp.route('/<int:room_id>/characters/<int:char_id>/unassign', methods=['POST'])
+@require_character_owner_or_gm
+def unassign_character_from_room(room_id, char_id):
+    """Отвязать персонажа от комнаты — персонаж остаётся в библиотеке владельца,
+    просто исчезает из ростера этой конкретной комнаты."""
+    link = CharacterRoomLink.query.filter_by(character_id=char_id, room_id=room_id).first()
+    if not link:
+        return jsonify({"error": "Character is not in this room"}), 400
+
+    try:
+        db.session.delete(link)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error unassigning character: {e}")
+        return jsonify({"error": "Failed to unassign character"}), 500
+
+    return jsonify({"message": "Character removed from room successfully"}), 200
 
 
 @rooms_bp.route('/<int:room_id>/dice-history', methods=['GET'])
@@ -142,7 +176,7 @@ def get_dice_history(room_id):
     room = Room.query.get_or_404(room_id)
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
- 
+
     rolls = [
         {
             "id": r.id,
@@ -158,145 +192,34 @@ def get_dice_history(room_id):
     return jsonify({"rolls": rolls}), 200
 
 
-# ============================================================================
-# ПЕРСОНАЖИ В КОМНАТЕ (управление составом игроков)
-# ============================================================================
-
-@rooms_bp.route('/<int:room_id>/characters', methods=['GET'])
-@login_required
-def get_room_characters(room_id):
-    """Получение списка персонажей, активных в этой комнате."""
-    room = Room.query.get_or_404(room_id)
-
-    if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
-        return jsonify({"error": "Access denied"}), 403
-
-    characters = []
-    for char in room.characters:
-        characters.append({
-            "id": char.id,
-            "name": char.name,
-            "owner_id": char.owner_id,
-            "avatar_url": char.avatar_url,
-            "sheet_data": char.sheet_data,
-            "updated_at": char.updated_at.isoformat()
-        })
-
-    return jsonify({"characters": characters}), 200
-
-
-@rooms_bp.route('/<int:room_id>/characters/assign', methods=['POST'])
-@login_required
-def assign_character_to_room(room_id):
-    """Добавление существующего персонажа в комнату (сделать его активным в игре)."""
-    room = Room.query.get_or_404(room_id)
-
-    membership = RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first()
-    # Проверка доступа к комнате
-    if not membership:
-        return jsonify({"error": "Access denied"}), 403
-
-    data = request.get_json()
-    if not data or not data.get('character_id'):
-        return jsonify({"error": "character_id is required"}), 400
-
-    char_id = data['character_id']
-    character = Character.query.get_or_404(char_id)
-
-    # Проверка, что это мой персонаж
-    if character.owner_id != current_user.id:
-        return jsonify({"error": "Permission denied"}), 403
-
-    # # Если персонаж уже в другой комнате, сначала "отвяжем" его оттуда
-    # # (В LSS это выглядит как "выйти из другой игры")
-    # if character.room_id is not None and character.room_id != room.id:
-    #     character.room_id = None
-    membership.active_character_id = character.id
-
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error assigning character: {e}")
-        return jsonify({"error": "Failed to assign character"}), 500
-
-    return jsonify({
-        "message": "Character assigned to room successfully",
-        "character": {
-            "id": character.id,
-            "name": character.name,
-            "room_id": character.room_id
-        }
-    }), 200
-
-
-@rooms_bp.route('/<int:room_id>/characters/<int:char_id>/unassign', methods=['POST'])
-@login_required
-def unassign_character_from_room(room_id, char_id):
-    """Удаление персонажа из комнаты (он остается в библиотеке пользователя)."""
-    room = Room.query.get_or_404(room_id)
-    character = Character.query.get_or_404(char_id)
-
-    membership = RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first()
-    # Проверка доступа
-    if not membership:
-        return jsonify({"error": "Access denied"}), 403
-
-    # Проверка, что персонаж принадлежит этой комнате
-    # if character.room_id != room.id:
-    #     return jsonify({"error": "Character is not in this room"}), 400
-
-    # Проверка прав: убрать может либо владелец, либо GM
-    if membership.active_character_id:
-        char = Character.query.get(membership.active_character_id)
-        if char.owner_id != current_user.id and room.gm_id != current_user.id:
-            return jsonify({"error": "Permission denied"}), 403
-
-    # Отвязываем от комнаты
-    membership.active_character_id = None
-
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error unassigning character: {e}")
-        return jsonify({"error": "Failed to unassign character"}), 500
-
-    return jsonify({
-        "message": "Character removed from room successfully",
-        "character": {
-            "id": character.id,
-            "name": character.name,
-            "room_id": None
-        }
-    }), 200
-
-
-# ============================================================================
-# БОЕВАЯ КАРТА
-# ============================================================================
-
 @rooms_bp.route('/<int:room_id>/battle-map', methods=['GET'])
 @login_required
 def get_battle_map(room_id):
     room = Room.query.get_or_404(room_id)
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
- 
+
     battle_map = room.battle_map
     if not battle_map:
         return jsonify({"error": "Battle map not found"}), 404
- 
+
+    # скрытые от игроков токены (ловушки, засады) не должны утекать в
+    # ответе не-GM участнику — фильтрация на клиенте не защита, JSON виден
+    # в devtools независимо от того, что рисует интерфейс
+    requester_is_gm = is_gm(room_id, current_user.id)
+
     objects = []
     for token in sorted(battle_map.tokens, key=lambda t: t.layer):
-        # instance_data (если есть) — источник истины для этого конкретного
-        # токена, sheet_data шаблона в этом случае не читаем вообще
+        if not requester_is_gm and not token.visible_to_players:
+            continue
+
         live_sheet = token.instance_data if token.instance_data is not None else (
             token.character.sheet_data if token.character else None
         )
         objects.append({
             "id": token.id,
             "character_id": token.character_id,
+            "created_by_user_id": token.created_by_user_id,
             "label": token.label,
             "image_url": token.image_url,
             "pos_x": token.pos_x,
@@ -310,7 +233,7 @@ def get_battle_map(room_id):
             "is_instance": token.instance_data is not None,
             "hp_current": (live_sheet or {}).get("vitality", {}).get("hp_current"),
         })
- 
+
     return jsonify({
         "id": battle_map.id,
         "grid_size": battle_map.grid_size,
@@ -320,28 +243,22 @@ def get_battle_map(room_id):
     }), 200
 
 
-# ============================================================================
-# ЗАГРУЗКА ФАЙЛОВ
-# ============================================================================
-
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_MIMETYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 
-def allowed_file(filename):
-    """Проверка расширения файла."""
+
+def _allowed_extension(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 @rooms_bp.route('/<int:room_id>/images', methods=['POST'])
 @login_required
 def upload_image(room_id):
-    """Загрузка изображения (карта или токен)."""
+    """Загрузка изображения (токен, фон, проп) для конкретной комнаты."""
     room = Room.query.get_or_404(room_id)
-
-    # Проверяем, что пользователь состоит в комнате
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
 
-    # Проверяем наличие файла
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -349,34 +266,28 @@ def upload_image(room_id):
     if file.filename == '':
         return jsonify({"error": "No file selected"}), 400
 
-    if not allowed_file(file.filename):
+    if file.mimetype not in ALLOWED_MIMETYPES or not _allowed_extension(file.filename):
         return jsonify({"error": "File type not allowed"}), 400
 
-    # Валидация через Pillow (проверяем, что это действительно изображение)
+    # content-type и расширение можно подделать — реальная проверка того,
+    # что байты действительно являются валидным изображением, через Pillow
     try:
         img = Image.open(file)
-        img.verify()  # Проверяем целостность файла
-        file.seek(0)  # Сбрасываем указатель после verify()
-    except Exception:
+        img.verify()
+        file.seek(0)  # verify() выжигает файловый объект, сбрасываем указатель
+    except (UnidentifiedImageError, OSError):
         return jsonify({"error": "Invalid image file"}), 400
 
-    # Генерируем уникальное имя файла
-    filename = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4().hex}_{filename}"
+    # secure_filename режет путь/расширение до безопасного, но само по себе
+    # не даёт непредсказуемости — оригинальное имя всё ещё узнаваемо и
+    # потенциально угадываемо, поэтому префиксуем uuid4
+    safe_original = secure_filename(file.filename)
+    unique_filename = f"{uuid.uuid4().hex}_{safe_original}"
 
-    # Создаем директорию для комнаты, если её нет
     upload_dir = Path(current_app.config['UPLOAD_DIR']) / f"room_{room.id}"
     upload_dir.mkdir(parents=True, exist_ok=True)
-
-    # Сохраняем файл
-    file_path = upload_dir / unique_filename
-    file.save(file_path)
-
-    # Формируем URL для доступа к файлу
-    # В проде здесь нужно будет настроить раздачу статических файлов через nginx
-    file_url = f"/uploads/room_{room.id}/{unique_filename}"
+    file.save(upload_dir / unique_filename)
 
     return jsonify({
-        "message": "File uploaded successfully",
-        "url": file_url
+        "url": f"/uploads/room_{room.id}/{unique_filename}",
     }), 201

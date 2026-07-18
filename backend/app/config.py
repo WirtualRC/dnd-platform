@@ -37,7 +37,7 @@ class DevConfig(Config):
         'DATABASE_URL'
     )
     # В дев-режиме разрешаем подключения с локальных адресов Vite
-    CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+    CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173', "http://127.0.0.1:5000"]
 
 
 class ProdConfig(Config):

@@ -224,8 +224,11 @@ class BattleMap(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False, unique=True)
     grid_size = db.Column(db.Integer, default=50, nullable=False)  # px на клетку
-    width = db.Column(db.Integer, default=1200, nullable=False)  # размер канвы в px
-    height = db.Column(db.Integer, default=800, nullable=False)
+    # виртуальный размер карты в px — заметно больше видимого вьюпорта
+    # (900x600), чтобы было куда панорамировать; не буквально бесконечно,
+    # но достаточно просторно для стола на несколько десятков токенов
+    width = db.Column(db.Integer, default=4000, nullable=False)
+    height = db.Column(db.Integer, default=4000, nullable=False)
     updated_at = db.Column(
         db.DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
@@ -273,6 +276,10 @@ class Token(db.Model):
     character_id = db.Column(
         db.Integer, db.ForeignKey("characters.id"), nullable=True
     )  # null для NPC/монстров/фона/пропсов
+    # кто разместил токен — нужно именно для пропсов без character_id
+    # (например, картинка, вставленная по Ctrl+V): владения персонажем тут
+    # нет, но право двигать своё же должно остаться у того, кто его добавил
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     label = db.Column(db.String(100), nullable=True)  # имя для NPC или подпись пропса
     image_url = db.Column(db.String(500), nullable=True)
 
