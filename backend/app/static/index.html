@@ -82,6 +82,10 @@
     <input id="new-char-name" placeholder="имя нового персонажа">
     <button onclick="createCharacter()">+ Создать персонажа</button>
   </div>
+  <div class="row">
+    <input id="import-char-file" type="file" accept="application/json,.json">
+    <button class="secondary" onclick="importCharacterFromFile()">Импортировать из файла</button>
+  </div>
 
   <!-- ЛИСТ ПЕРСОНАЖА -->
   <div id="sheet" class="hidden">
@@ -197,11 +201,48 @@ async function loadCharacters() {
   const list = document.getElementById('char-list');
   list.innerHTML = currentCharacters.length
     ? currentCharacters.map(c => `
-        <div class="char-list-item" onclick="openSheet(${c.id})">
-          <span>${escapeHtml(c.name)}</span>
-          <span class="save-status">${(c.sheet_data.class_name || '')} ${c.sheet_data.level || ''}</span>
+        <div class="char-list-item">
+          <span onclick="openSheet(${c.id})" style="cursor:pointer;flex:1">
+            ${escapeHtml(c.name)}
+            <span class="save-status">${(c.sheet_data.class_name || '')} ${c.sheet_data.level || ''}</span>
+          </span>
+          <button class="secondary" onclick="event.stopPropagation(); exportCharacter(${c.id}, '${jsStringForAttr(c.name)}')">Экспорт</button>
         </div>`).join('')
     : '<div class="save-status">Персонажей пока нет — создай первого ниже.</div>';
+}
+
+async function exportCharacter(id, name) {
+  try {
+    const data = await api(`/characters/${id}/export`);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name || 'character'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { showError(e.message); }
+}
+
+async function importCharacterFromFile() {
+  const fileInput = document.getElementById('import-char-file');
+  const file = fileInput.files[0];
+  if (!file) return showError('Выбери JSON-файл персонажа');
+
+  try {
+    const text = await file.text();
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch (e) {
+      return showError('Файл не является корректным JSON');
+    }
+    await api('/characters/import', { method: 'POST', body: JSON.stringify(payload) });
+    fileInput.value = '';
+    await loadCharacters();
+  } catch (e) { showError(e.message); }
 }
 
 async function createCharacter() {
@@ -373,6 +414,14 @@ async function saveCharacter() {
 function val(id) { return document.getElementById(id).value.trim(); }
 function escapeHtml(str) {
   const d = document.createElement('div'); d.textContent = str ?? ''; return d.innerHTML;
+}
+
+// экранирование специально для случая "JS-строка внутри HTML-атрибута
+// onclick=\"...\"" — escapeHtml() одна не годится, она не трогает двойные
+// кавычки, которые ломают именно атрибут (а не JS-строку внутри него)
+function jsStringForAttr(str) {
+  const jsEscaped = (str ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return jsEscaped.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // если уже залогинены (кука жива) — сразу входим

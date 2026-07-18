@@ -308,31 +308,3 @@ class Token(db.Model):
 
     def __repr__(self):
         return f"<Token {self.label or self.character_id} layer={self.layer} @ ({self.pos_x},{self.pos_y})>"
-
-
-class DrawingShape(db.Model):
-    """Область заклинания (круг/конус/прямоугольник) на карте.
-
-    Это самая необязательная модель в схеме: такие фигуры обычно живут
-    секунды-минуты во время конкретного хода, и их не жалко терять при
-    перезапуске сервера. Можно вообще не сохранять их в БД, а держать
-    только в памяти процесса и рассылать через socket broadcast — так и
-    проще, и быстрее. Таблица оставлена на случай, если понадобится
-    история "кто куда кастовал" или сохранение шаблонов зон между сессиями.
-    """
-
-    __tablename__ = "drawing_shapes"
-
-    id = db.Column(db.Integer, primary_key=True)
-    battle_map_id = db.Column(db.Integer, db.ForeignKey("battle_maps.id"), nullable=False)
-    owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    shape_type = db.Column(db.String(20), nullable=False)  # circle | cone | rect | line
-    coords = db.Column(db.JSON, nullable=False)  # {"x":.., "y":.., "radius":..} и т.п.
-    color = db.Column(db.String(20), default="#D85A30", nullable=False)
-    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
-
-    battle_map = db.relationship("BattleMap")
-    owner = db.relationship("User")
-
-    def __repr__(self):
-        return f"<DrawingShape {self.shape_type} owner={self.owner_id}>"

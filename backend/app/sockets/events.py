@@ -179,10 +179,16 @@ def handle_token_add(data):
     db.session.add(token)
     db.session.commit()
 
+    live_sheet = token.instance_data if token.instance_data is not None else (
+        token.character.sheet_data if token.character else None
+    )
+    vitality = (live_sheet or {}).get('vitality', {})
+
     emit('token_added', {
         'id': token.id,
         'battle_map_id': token.battle_map_id,
         'character_id': token.character_id,
+        'character_name': token.character.name if token.character else None,
         'created_by_user_id': token.created_by_user_id,
         'label': token.label,
         'image_url': token.image_url,
@@ -194,7 +200,10 @@ def handle_token_add(data):
         'layer': token.layer,
         'locked': token.locked,
         'visible_to_players': token.visible_to_players,
-        'has_instance_data': token.instance_data is not None,
+        'is_instance': token.instance_data is not None,
+        'hp_current': vitality.get('hp_current'),
+        'hp_max': vitality.get('hp_max'),
+        'ac': vitality.get('ac'),
     }, room=str(room_id))
 
 
@@ -478,3 +487,37 @@ def handle_spell_cast(data):
             }, room=str(room_id))
 
     emit('spell_cast_effect', payload, room=str(room_id))
+
+
+@socketio.on('spell_target_preview')
+def handle_spell_target_preview(data):
+    """Живое превью прицеливания — тот же принцип, что и token_transform_live:
+    никогда не пишет в БД, просто ретранслирует остальным участникам, чтобы
+    все видели, куда наводится заклинание, ДО подтверждения каста.
+    Намеренно тихо игнорирует некорректные вызовы без emit('error', ...) —
+    это высокочастотное событие на каждое движение мыши."""
+    room_id = data.get('room_id')
+    if not room_id or not _is_member(room_id, current_user.id):
+        return
+
+    emit('spell_target_preview', {
+        'user': current_user.username,
+        'character_id': data.get('character_id'),
+        'action_name': data.get('action_name'),
+        'target_x': data.get('target_x'),
+        'target_y': data.get('target_y'),
+        'aoe': data.get('aoe'),
+    }, room=str(room_id), include_self=False)
+
+
+@socketio.on('spell_target_clear')
+def handle_spell_target_clear(data):
+    """Отмена прицеливания (Escape) — убрать превью у остальных, чтобы не
+    висело на экране бесконечно после того, как каст отменили."""
+    room_id = data.get('room_id')
+    if not room_id or not _is_member(room_id, current_user.id):
+        return
+
+    emit('spell_target_clear', {
+        'character_id': data.get('character_id'),
+    }, room=str(room_id), include_self=False)

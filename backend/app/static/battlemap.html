@@ -38,6 +38,12 @@
   .pill.roleplay { background: var(--ok); color: white; border: none; }
   #log { max-height: 140px; overflow-y: auto; font-size: 12px; color: var(--text-dim); }
   #log div { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .roster-entry { display: flex; align-items: center; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; min-width: 150px; }
+  .roster-entry:hover { border-color: var(--accent); }
+  .roster-avatar { width: 32px; height: 32px; border-radius: 50%; background-size: cover; background-position: center; background-color: var(--surface2); flex-shrink: 0; border: 1px solid var(--border); }
+  .roster-name { font-size: 13px; font-weight: 600; }
+  .roster-stats { font-size: 11px; color: var(--text-dim); }
+  #context-menu { position: fixed; z-index: 1000; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
   .hidden { display: none !important; }
   #error-box { background: var(--danger); color: white; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
   .top-bar { display: flex; justify-content: space-between; align-items: center; }
@@ -87,6 +93,11 @@
 
 <!-- БОЕВАЯ КАРТА -->
 <div id="map-section" class="hidden">
+  <h2>Отряд на карте</h2>
+  <div class="card">
+    <div class="row" id="party-roster-list" style="flex-wrap:wrap"></div>
+  </div>
+
   <h2>Мои действия</h2>
   <div class="card">
     <div class="row">
@@ -144,6 +155,10 @@
   </div>
 </div>
 
+<div id="context-menu" class="hidden">
+  <button class="secondary" id="context-menu-open-sheet" style="width:100%">Открыть лист персонажа</button>
+</div>
+
 <script>
 const API = '/api/v1';
 let socket = null;
@@ -162,6 +177,8 @@ let currentActionsById = {};
 let activeAction = null;
 let activeCasterCharacterId = null;
 let previewLayer;
+let remotePreviewLayer;
+let remoteTargetPreviews = {}; // ключ character_id -> {circle}
 
 function showError(msg) {
   const box = document.getElementById('error-box');
@@ -247,6 +264,10 @@ function connectSocket() {
       node.hpText.text(`HP ${data.vitality_patch.hp_current}`);
       tokenLayer.draw();
     }
+    if (tokenDataById[data.token_id]) {
+      Object.assign(tokenDataById[data.token_id], data.vitality_patch);
+      renderRoster();
+    }
   });
 
   socket.on('token_moved_live', (data) => {
@@ -283,6 +304,7 @@ function connectSocket() {
         selectedTokenId = null;
       }
       tokenLayer.draw();
+      renderRoster();
     }
   });
 
@@ -298,6 +320,14 @@ function connectSocket() {
     const dmgText = data.damage_result ? ` — урон ${data.damage_result.result} (${data.damage_result.breakdown})` : '';
     log(`${data.user} использует «${data.action_name}»${dmgText}`);
 
+    // если у этого персонажа висело чужое живое превью прицеливания —
+    // убираем его, каст уже произошёл, дальше эта роль у вспышки эффекта
+    const remoteEntry = remoteTargetPreviews[data.character_id];
+    if (remoteEntry) {
+      if (remoteEntry.circle) remoteEntry.circle.destroy();
+      delete remoteTargetPreviews[data.character_id];
+    }
+
     if (data.aoe && data.aoe.shape === 'circle') {
       const radiusPx = (data.aoe.radius / 5) * currentGridSize;
       const flash = new Konva.Circle({
@@ -307,6 +337,44 @@ function connectSocket() {
       previewLayer.add(flash);
       previewLayer.draw();
       setTimeout(() => { flash.destroy(); previewLayer.draw(); }, 1500);
+    }
+    remotePreviewLayer.draw();
+  });
+
+  socket.on('spell_target_preview', (data) => {
+    const key = data.character_id;
+    let entry = remoteTargetPreviews[key];
+    if (!entry) {
+      entry = { circle: new Konva.Circle({ listening: false }) };
+      remotePreviewLayer.add(entry.circle);
+      remoteTargetPreviews[key] = entry;
+    }
+
+    // важно: setAttrs со ВСЕМИ стилевыми полями на каждый тик, а не
+    // только один раз при создании фигуры — иначе при переключении между
+    // действием с aoe и без него старый стиль (заливка/обводка/пунктир)
+    // "залипает", меняются только позиция и радиус
+    if (data.aoe && data.aoe.shape === 'circle') {
+      const radiusPx = (data.aoe.radius / 5) * currentGridSize;
+      entry.circle.setAttrs({
+        x: data.target_x, y: data.target_y, radius: radiusPx,
+        fill: 'rgba(136,136,136,0.18)', stroke: '#888', strokeWidth: 1.5, dash: [6, 4],
+      });
+    } else {
+      entry.circle.setAttrs({
+        x: data.target_x, y: data.target_y, radius: 5,
+        fill: '#888', stroke: null, strokeWidth: 0, dash: [],
+      });
+    }
+    remotePreviewLayer.draw();
+  });
+
+  socket.on('spell_target_clear', (data) => {
+    const entry = remoteTargetPreviews[data.character_id];
+    if (entry) {
+      if (entry.circle) entry.circle.destroy();
+      delete remoteTargetPreviews[data.character_id];
+      remotePreviewLayer.draw();
     }
   });
 
@@ -462,6 +530,12 @@ function initStage(mapWidth, mapHeight, gridSize) {
   previewLayer = new Konva.Layer();
   stage.add(previewLayer);
 
+  // отдельный слой под превью прицеливания ДРУГИХ участников — если бы
+  // рисовал их в том же previewLayer, что и своё превью, собственный
+  // updateActionPreview() стирал бы их на каждое движение своей же мыши
+  remotePreviewLayer = new Konva.Layer();
+  stage.add(remotePreviewLayer);
+
   // клик по карте: если идёт прицеливание — подтверждает каст в этой точке;
   // иначе, если клик пришёлся на пустое место — снимает выделение токена
   stage.on('click', (e) => {
@@ -473,6 +547,7 @@ function initStage(mapWidth, mapHeight, gridSize) {
   });
 
   tokensById = {};
+  remoteTargetPreviews = {};
 }
 
 // стейдж может быть подвинут (панорамирование) и масштабирован (зум) —
@@ -500,6 +575,83 @@ function resetView() {
   stage.position({ x: 0, y: 0 });
   stage.batchDraw();
 }
+
+// --- ростер отряда: карточки для токенов персонажей (не саммонов/пропов) ---
+function renderRoster() {
+  const container = document.getElementById('party-roster-list');
+  const entries = Object.entries(tokenDataById).filter(([, t]) => t.character_id && !t.is_instance);
+
+  container.innerHTML = entries.length
+    ? entries.map(([tokenId, t]) => `
+        <div class="roster-entry" onclick="onRosterClick(${tokenId}, ${t.character_id})" oncontextmenu="onRosterContextMenu(event, ${t.character_id})">
+          <div class="roster-avatar" style="background-image:url('${t.image_url || ''}')"></div>
+          <div>
+            <div class="roster-name">${escapeHtml(t.character_name || ('Персонаж #' + t.character_id))}</div>
+            <div class="roster-stats">HP ${t.hp_current ?? '?'}/${t.hp_max ?? '?'} · AC ${t.ac ?? '?'}</div>
+          </div>
+        </div>`).join('')
+    : '<span style="font-size:12px;color:var(--text-dim)">на карте пока нет токенов персонажей (не саммонов)</span>';
+}
+
+function panToToken(tokenId) {
+  const data = tokenDataById[tokenId];
+  if (!data || !stage) return;
+  const scale = stage.scaleX();
+  stage.position({
+    x: stage.width() / 2 - data.pos_x * scale,
+    y: stage.height() / 2 - data.pos_y * scale,
+  });
+  stage.batchDraw();
+}
+
+function onRosterClick(tokenId, characterId) {
+  panToToken(tokenId);
+  // если это один из твоих персонажей — заодно переключаем хотбар на него,
+  // чтобы не лезть отдельно в выпадающий список действий
+  if (myCharacterIds.has(characterId)) {
+    const select = document.getElementById('action-character-select');
+    select.value = characterId;
+    renderActionBar(characterId);
+  }
+}
+
+// --- контекстное меню GM: "открыть лист персонажа" ---
+let contextMenuCharacterId = null;
+
+function showContextMenu(x, y, characterId) {
+  contextMenuCharacterId = characterId;
+  const menu = document.getElementById('context-menu');
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.classList.remove('hidden');
+}
+
+function hideContextMenu() {
+  document.getElementById('context-menu').classList.add('hidden');
+  contextMenuCharacterId = null;
+}
+
+function onRosterContextMenu(e, characterId) {
+  e.preventDefault();
+  if (!isCurrentUserGm) return;
+  showContextMenu(e.clientX, e.clientY, characterId);
+}
+
+document.addEventListener('click', () => hideContextMenu());
+document.getElementById('context-menu-open-sheet').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const characterId = contextMenuCharacterId;
+  hideContextMenu();
+  if (!characterId) return;
+  try {
+    const data = await api(`/rooms/${currentRoomId}/characters/${characterId}/full`);
+    // черновой просмотр — реальный UI отрендерил бы лист аккуратно,
+    // здесь достаточно увидеть сами данные для проверки прав доступа
+    alert(`${data.name}\n\n${JSON.stringify(data.sheet_data, null, 2)}`);
+  } catch (err) {
+    showError(err.message);
+  }
+});
 
 function applyTokenSize(refs, width, height) {
   if (!refs.shape) return;
@@ -613,6 +765,12 @@ function upsertTokenNode(obj) {
     promptDamage(obj.id);
   });
 
+  group.on('contextmenu', (e) => {
+    e.evt.preventDefault();
+    if (!isCurrentUserGm || !obj.character_id) return;
+    showContextMenu(e.evt.clientX, e.evt.clientY, obj.character_id);
+  });
+
   group.on('transformend', () => {
     const scaleX = group.scaleX(), scaleY = group.scaleY();
     const newWidth = Math.max(10, Math.round((obj.width || 50) * scaleX));
@@ -634,7 +792,12 @@ function upsertTokenNode(obj) {
 
   tokenLayer.add(group);
   tokensById[obj.id] = refs;
-  tokenDataById[obj.id] = { pos_x: obj.pos_x, pos_y: obj.pos_y, character_id: obj.character_id };
+  tokenDataById[obj.id] = {
+    pos_x: obj.pos_x, pos_y: obj.pos_y, character_id: obj.character_id,
+    character_name: obj.character_name, is_instance: obj.is_instance,
+    hp_current: obj.hp_current, hp_max: obj.hp_max, ac: obj.ac, image_url: obj.image_url,
+  };
+  renderRoster();
   tokenLayer.draw();
 }
 
@@ -781,6 +944,9 @@ function selectAction(actionId) {
 }
 
 function cancelTargeting() {
+  if (activeAction && currentRoomId) {
+    socket.emit('spell_target_clear', { room_id: currentRoomId, character_id: activeCasterCharacterId });
+  }
   activeAction = null;
   if (previewLayer) { previewLayer.destroyChildren(); previewLayer.draw(); }
 }
@@ -789,9 +955,21 @@ function findCasterToken(characterId) {
   return Object.values(tokenDataById).find(t => t.character_id === characterId) || null;
 }
 
+const throttledSpellTargetBroadcast = throttle((pos) => {
+  if (!activeAction) return;
+  socket.emit('spell_target_preview', {
+    room_id: currentRoomId,
+    character_id: activeCasterCharacterId,
+    action_name: activeAction.name,
+    target_x: pos.x, target_y: pos.y,
+    aoe: activeAction.aoe || null,
+  });
+}, 50);
+
 function updateActionPreview(pos) {
   if (!pos || !activeAction) return;
   previewLayer.destroyChildren();
+  throttledSpellTargetBroadcast(pos);
 
   const casterToken = findCasterToken(activeCasterCharacterId);
 

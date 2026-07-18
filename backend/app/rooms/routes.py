@@ -6,7 +6,7 @@ from werkzeug.utils import secure_filename
 from PIL import Image, UnidentifiedImageError
 
 from ..extensions import db
-from ..models import Room, RoomMembership, RoomRole, BattleMap, CharacterRoomLink
+from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
 from ..utils.permissions import is_gm, require_character_owner_or_gm
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -216,9 +216,11 @@ def get_battle_map(room_id):
         live_sheet = token.instance_data if token.instance_data is not None else (
             token.character.sheet_data if token.character else None
         )
+        vitality = (live_sheet or {}).get("vitality", {})
         objects.append({
             "id": token.id,
             "character_id": token.character_id,
+            "character_name": token.character.name if token.character else None,
             "created_by_user_id": token.created_by_user_id,
             "label": token.label,
             "image_url": token.image_url,
@@ -231,7 +233,9 @@ def get_battle_map(room_id):
             "locked": token.locked,
             "visible_to_players": token.visible_to_players,
             "is_instance": token.instance_data is not None,
-            "hp_current": (live_sheet or {}).get("vitality", {}).get("hp_current"),
+            "hp_current": vitality.get("hp_current"),
+            "hp_max": vitality.get("hp_max"),
+            "ac": vitality.get("ac"),
         })
 
     return jsonify({
@@ -240,6 +244,28 @@ def get_battle_map(room_id):
         "width": battle_map.width,
         "height": battle_map.height,
         "objects": objects,
+    }), 200
+
+
+@rooms_bp.route('/<int:room_id>/characters/<int:char_id>/full', methods=['GET'])
+@login_required
+def get_character_full_in_room(room_id, char_id):
+    """Полный лист персонажа в контексте комнаты. Доступен владельцу или
+    GM этой комнаты — намеренно БЕЗ проверки CharacterRoomLink: если у
+    персонажа есть токен на этой карте, GM должен видеть его лист
+    независимо от того, был ли персонаж формально добавлен в ростер."""
+    if not RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first():
+        return jsonify({"error": "Access denied"}), 403
+
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id and not is_gm(room_id, current_user.id):
+        return jsonify({"error": "Permission denied"}), 403
+
+    return jsonify({
+        "id": character.id,
+        "name": character.name,
+        "avatar_url": character.avatar_url,
+        "sheet_data": character.sheet_data,
     }), 200
 
 

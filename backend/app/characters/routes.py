@@ -138,3 +138,79 @@ def delete_character(char_id):
         return jsonify({"error": "Failed to delete character"}), 500
 
     return jsonify({"message": "Character deleted successfully"}), 200
+
+
+@characters_bp.route('/<int:char_id>/export', methods=['GET'])
+@login_required
+def export_character(char_id):
+    """Отдаёт персонажа как самодостаточный JSON — скачал, скинул другу,
+    он импортирует. Никаких ссылок на комнаты/room_id внутри — экспорт
+    только того, что реально принадлежит персонажу как сущности."""
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    return jsonify({
+        "version": 1,
+        "name": character.name,
+        "avatar_url": character.avatar_url,
+        "sheet_data": character.sheet_data,
+    }), 200
+
+
+def _is_safe_avatar_url(url) -> bool:
+    """Импортированный файл — недоверенные данные, потенциально от кого
+    угодно. avatar_url всегда используется как src картинки, но лучше не
+    пускать javascript:/data: и подобное на всякий случай."""
+    if url is None:
+        return True
+    if not isinstance(url, str) or len(url) > 500:
+        return False
+    return url.startswith('http://') or url.startswith('https://') or url.startswith('/')
+
+
+@characters_bp.route('/import', methods=['POST'])
+@login_required
+def import_character():
+    """Принимает файл от export_character (свой или чужой) и создаёт
+    нового персонажа в библиотеке текущего пользователя — независимую
+    копию, не связанную с оригиналом."""
+    payload = request.get_json()
+    if not payload:
+        return jsonify({"error": "No data provided"}), 400
+
+    if payload.get('version') != 1:
+        return jsonify({"error": "Неподдерживаемая версия файла персонажа"}), 400
+
+    name = payload.get('name')
+    if not name or not isinstance(name, str):
+        return jsonify({"error": "Отсутствует или некорректно имя персонажа"}), 400
+
+    sheet_data = payload.get('sheet_data')
+    print(payload)
+    if not isinstance(sheet_data, dict):
+        return jsonify({"error": "sheet_data должен быть объектом"}), 400
+
+    avatar_url = payload.get('avatar_url')
+    if not _is_safe_avatar_url(avatar_url):
+        return jsonify({"error": "Некорректный avatar_url"}), 400
+
+    new_char = Character(
+        name=name.strip()[:100],
+        owner_id=current_user.id,
+        avatar_url=avatar_url,
+        sheet_data=sheet_data,
+    )
+    db.session.add(new_char)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error importing character: {e}")
+        return jsonify({"error": "Failed to import character"}), 500
+
+    return jsonify({
+        "message": "Character imported successfully",
+        "character": {"id": new_char.id, "name": new_char.name},
+    }), 201
