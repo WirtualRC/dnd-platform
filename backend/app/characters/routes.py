@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
-from ..extensions import db
-from ..models import Character
+from ..extensions import db, socketio
+from ..models import Character, RoomMembership
 
 characters_bp = Blueprint('characters', __name__)
 
@@ -109,6 +109,25 @@ def update_character(char_id):
         current_app.logger.error(f"Error updating character: {e}")
         return jsonify({"error": "Failed to update character"}), 500
 
+    # обычный PUT ничего не знает о комнатах (в URL их нет), но если этот
+    # персонаж сейчас active_character_id в одной или нескольких комнатах —
+    # те, кто смотрит на ростер в этот момент, должны увидеть изменение
+    # без перезагрузки страницы. Один персонаж может быть активен сразу в
+    # нескольких комнатах (см. CharacterRoomLink), поэтому рассылаем всем.
+    memberships = RoomMembership.query.filter_by(active_character_id=character.id).all()
+    if memberships:
+        vitality = character.sheet_data.get("vitality", {})
+        payload = {
+            "character_id": character.id,
+            "name": character.name,
+            "avatar_url": character.avatar_url,
+            "hp_current": vitality.get("hp_current"),
+            "hp_max": vitality.get("hp_max"),
+            "ac": vitality.get("ac"),
+        }
+        for m in memberships:
+            socketio.emit('character_updated', payload, room=str(m.room_id))
+
     return jsonify({
         "message": "Character updated successfully",
         "character": {
@@ -187,7 +206,6 @@ def import_character():
         return jsonify({"error": "Отсутствует или некорректно имя персонажа"}), 400
 
     sheet_data = payload.get('sheet_data')
-    print(payload)
     if not isinstance(sheet_data, dict):
         return jsonify({"error": "sheet_data должен быть объектом"}), 400
 

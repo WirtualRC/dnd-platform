@@ -521,3 +521,45 @@ def handle_spell_target_clear(data):
     emit('spell_target_clear', {
         'character_id': data.get('character_id'),
     }, room=str(room_id), include_self=False)
+
+
+@socketio.on('character_update_state')
+def handle_character_update_state(data):
+    """Правка боевого состояния персонажа НАПРЯМУЮ, без токена на карте —
+    для roleplay-режима, где боя (и токенов) может вообще не быть.
+    Аналог token_update_state, только бьёт в Character.sheet_data."""
+    ALLOWED_VITALITY_KEYS = {'hp_current', 'hp_temp'}
+
+    room_id = data.get('room_id')
+    character_id = data.get('character_id')
+    patch = data.get('patch') or {}
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    if not patch or not set(patch.keys()) <= ALLOWED_VITALITY_KEYS:
+        emit('error', {'message': f'Патч может содержать только поля {ALLOWED_VITALITY_KEYS}'})
+        return
+    if any(not isinstance(v, int) or v < 0 for v in patch.values()):
+        emit('error', {'message': 'Значения HP должны быть неотрицательными целыми числами'})
+        return
+
+    character = Character.query.get(character_id)
+    if not character:
+        emit('error', {'message': 'Персонаж не найден'})
+        return
+
+    if not (is_character_owner(character_id, current_user.id) or is_gm(room_id, current_user.id)):
+        emit('error', {'message': 'Недостаточно прав менять состояние этого персонажа'})
+        return
+
+    new_data = dict(character.sheet_data)
+    new_data['vitality'] = {**new_data.get('vitality', {}), **patch}
+    character.sheet_data = new_data
+    db.session.commit()
+
+    emit('character_state_changed', {
+        'character_id': character.id,
+        'vitality_patch': patch,
+    }, room=str(room_id))

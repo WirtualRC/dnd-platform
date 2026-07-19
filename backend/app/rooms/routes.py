@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from PIL import Image, UnidentifiedImageError
 
-from ..extensions import db
+from ..extensions import db, socketio
 from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
 from ..utils.permissions import is_gm, require_character_owner_or_gm
 
@@ -100,10 +100,26 @@ def get_room(room_id):
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
 
-    members = [
-        {"user_id": m.user.id, "username": m.user.username, "role": m.role.value}
-        for m in room.memberships
-    ]
+    members = []
+    for m in room.memberships:
+        active_char = None
+        if m.active_character_id and m.active_character:
+            char = m.active_character
+            vitality = char.sheet_data.get("vitality", {})
+            active_char = {
+                "id": char.id,
+                "name": char.name,
+                "avatar_url": char.avatar_url,
+                "hp_current": vitality.get("hp_current"),
+                "hp_max": vitality.get("hp_max"),
+                "ac": vitality.get("ac"),
+            }
+        members.append({
+            "user_id": m.user.id,
+            "username": m.user.username,
+            "role": m.role.value,
+            "active_character": active_char,
+        })
     return jsonify({
         "id": room.id,
         "name": room.name,
@@ -112,6 +128,40 @@ def get_room(room_id):
         "gm_id": room.gm_id,
         "members": members,
     }), 200
+
+
+@rooms_bp.route('/<int:room_id>/active-character', methods=['PUT'])
+@login_required
+def set_active_character(room_id):
+    """Выбрать, каким персонажем этот участник сейчас играет в этой
+    комнате — источник ростера вне боя (RoomMembership.active_character_id),
+    независимо от того, стоит ли токен на карте вообще."""
+    membership = RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first()
+    if not membership:
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json() or {}
+    character_id = data.get('character_id')  # None — снять активного персонажа
+
+    character = None
+    if character_id is not None:
+        character = Character.query.get(character_id)
+        if not character or character.owner_id != current_user.id:
+            return jsonify({"error": "Можно выбрать активным только своего персонажа"}), 403
+
+    membership.active_character_id = character_id
+    db.session.commit()
+
+    socketio.emit('active_character_changed', {
+        'room_id': room_id,
+        'user_id': current_user.id,
+        'username': current_user.username,
+        'character_id': character_id,
+        'character_name': character.name if character else None,
+        'avatar_url': character.avatar_url if character else None,
+    }, room=str(room_id))
+
+    return jsonify({"character_id": character_id}), 200
 
 
 @rooms_bp.route('/<int:room_id>/characters/<int:char_id>/assign', methods=['POST'])
