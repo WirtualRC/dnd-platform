@@ -100,33 +100,13 @@ def get_room(room_id):
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
 
-    members = []
-    for m in room.memberships:
-        active_char = None
-        if m.active_character_id and m.active_character:
-            char = m.active_character
-            vitality = char.sheet_data.get("vitality", {})
-            active_char = {
-                "id": char.id,
-                "name": char.name,
-                "avatar_url": char.avatar_url,
-                "hp_current": vitality.get("hp_current"),
-                "hp_max": vitality.get("hp_max"),
-                "ac": vitality.get("ac"),
-            }
-        members.append({
-            "user_id": m.user.id,
-            "username": m.user.username,
-            "role": m.role.value,
-            "active_character": active_char,
-        })
     return jsonify({
         "id": room.id,
         "name": room.name,
         "invite_code": room.invite_code,
         "mode": room.mode.value,
         "gm_id": room.gm_id,
-        "members": members,
+        "members": [m.to_dict() for m in room.memberships],
     }), 200
 
 
@@ -154,11 +134,7 @@ def set_active_character(room_id):
 
     socketio.emit('active_character_changed', {
         'room_id': room_id,
-        'user_id': current_user.id,
-        'username': current_user.username,
-        'character_id': character_id,
-        'character_name': character.name if character else None,
-        'avatar_url': character.avatar_url if character else None,
+        **membership.to_dict(),
     }, room=str(room_id))
 
     return jsonify({"character_id": character_id}), 200
@@ -232,6 +208,7 @@ def get_dice_history(room_id):
             "id": r.id,
             "user": r.user.username,
             "character_id": r.character_id,
+            "character_name": r.character.name if r.character else None,
             "formula": r.formula,
             "result": r.result,
             "breakdown": r.breakdown,

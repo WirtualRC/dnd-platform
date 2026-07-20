@@ -132,6 +132,29 @@ class RoomMembership(db.Model):
     user = db.relationship("User", back_populates="memberships")
     active_character = db.relationship("Character")
 
+    def to_dict(self):
+        """Единая сериализация участника — используется и в GET /rooms/<id>,
+        и в сокет-рассылках (room_joined, active_character_changed), чтобы
+        везде был один и тот же набор полей, а не версия попроще."""
+        active_char = None
+        if self.active_character_id and self.active_character:
+            char = self.active_character
+            vitality = char.sheet_data.get("vitality", {})
+            active_char = {
+                "id": char.id,
+                "name": char.name,
+                "avatar_url": char.avatar_url,
+                "hp_current": vitality.get("hp_current"),
+                "hp_max": vitality.get("hp_max"),
+                "ac": vitality.get("ac"),
+            }
+        return {
+            "user_id": self.user_id,
+            "username": self.user.username,
+            "role": self.role.value,
+            "active_character": active_char,
+        }
+
     def __repr__(self):
         return f"<Membership user={self.user_id} room={self.room_id} role={self.role.value}>"
 

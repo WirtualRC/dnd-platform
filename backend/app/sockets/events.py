@@ -1,9 +1,11 @@
+import random
+
 from flask_login import current_user
 from flask_socketio import emit, join_room as sio_join_room, leave_room as sio_leave_room
 
 from ..extensions import db, socketio
 from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap
-from ..utils.dice import roll, InvalidDiceFormula
+from ..utils.dice import roll, InvalidDiceFormula, ALLOWED_SIDES
 from ..utils.permissions import is_gm, is_character_owner
 
 
@@ -28,9 +30,11 @@ def handle_join_room(data):
         return
 
     sio_join_room(str(room_id))
+
+    membership = RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first()
     emit('room_joined', {
         'room_id': room_id,
-        'username': current_user.username,
+        **membership.to_dict(),
     }, room=str(room_id))
 
 
@@ -44,8 +48,9 @@ def handle_leave_room(data):
 @socketio.on('dice_roll')
 def handle_dice_roll(data):
     room_id = data.get('room_id')
-    formula = (data.get('formula') or '').strip()
     character_id = data.get('character_id')
+    advantage = bool(data.get('advantage'))
+    disadvantage = bool(data.get('disadvantage'))
 
     if not room_id or not _is_member(room_id, current_user.id):
         emit('error', {'message': 'Вы не участник этой комнаты'})
@@ -59,19 +64,53 @@ def handle_dice_roll(data):
         emit('error', {'message': 'Нельзя подписывать бросок чужим персонажем'})
         return
 
-    try:
-        result = roll(formula)
-    except InvalidDiceFormula as e:
-        emit('error', {'message': str(e)})
-        return
+    if advantage or disadvantage:
+        # d20 с преимуществом/помехой — не обычная формула из dice.py
+        # (два d20 и выбор одного — это правило, не арифметика), поэтому
+        # отдельная ветка: клиент шлёт целый bonus, а не строку формулы.
+        # Бросок всегда решает сервер, даже здесь — иначе это можно было
+        # бы подделать на клиенте перед отправкой.
+        bonus = data.get('bonus')
+        if not isinstance(bonus, int):
+            emit('error', {'message': 'Для броска с преимуществом/помехой нужен целый bonus'})
+            return
+        
+        sides = data.get('sides', 20)
+        if sides not in ALLOWED_SIDES:
+            emit('error', {'message': f'Неподдерживаемая кость: d{sides}'})
+            return
+        
+        r1, r2 = random.randint(1, sides), random.randint(1, sides)
+        if advantage and not disadvantage:
+            chosen, label = max(r1, r2), 'преимущество'
+        elif disadvantage and not advantage:
+            chosen, label = min(r1, r2), 'помеха'
+        else:
+            # оба флага разом — по правилам 5e гасят друг друга, обычный бросок
+            chosen, label = r1, 'обычный бросок'
+
+        sign = '+' if bonus >= 0 else '-'
+        final_formula = f"1d{sides}{sign}{abs(bonus)}"
+        final_total = chosen + bonus
+        final_breakdown = f"d{sides}[{r1}, {r2}] ({label}) {sign} {abs(bonus)}"
+    else:
+        formula = (data.get('formula') or '').strip()
+        try:
+            result = roll(formula)
+        except InvalidDiceFormula as e:
+            emit('error', {'message': str(e)})
+            return
+        final_formula = result.formula
+        final_total = result.total
+        final_breakdown = result.breakdown
 
     dice_roll = DiceRoll(
         room_id=room_id,
         user_id=current_user.id,
         character_id=character_id,
-        formula=result.formula,
-        result=result.total,
-        breakdown=result.breakdown,
+        formula=final_formula,
+        result=final_total,
+        breakdown=final_breakdown,
     )
     db.session.add(dice_roll)
     db.session.commit()
@@ -80,9 +119,10 @@ def handle_dice_roll(data):
         'id': dice_roll.id,
         'user': current_user.username,
         'character_id': character_id,
-        'formula': result.formula,
-        'result': result.total,
-        'breakdown': result.breakdown,
+        'character_name': dice_roll.character.name if dice_roll.character else None,
+        'formula': final_formula,
+        'result': final_total,
+        'breakdown': final_breakdown,
         'created_at': dice_roll.created_at.isoformat(),
     }, room=str(room_id))
 
@@ -482,6 +522,7 @@ def handle_spell_cast(data):
             }
             emit('dice_roll', {
                 'id': dice_roll.id, 'user': current_user.username, 'character_id': character_id,
+                'character_name': character.name,
                 'formula': result.formula, 'result': result.total, 'breakdown': result.breakdown,
                 'created_at': dice_roll.created_at.isoformat(),
             }, room=str(room_id))
