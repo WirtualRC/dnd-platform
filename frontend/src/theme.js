@@ -5,7 +5,7 @@ import { createTheme } from '@mantine/core';
 export const theme = createTheme({
   primaryColor: 'lssBlue',
   colors: {
-    lssBlue: ['#eef2fd', '#d7e0fa', '#b0c1f5', '#87a0ef', '#638ce9', '#4776e6', '#385ec0', '#2c4a99', '#213872', '#16264d'],
+    lssBlue: ['#eef2fd', '#d7e0fa', '#b0c1f5', '#87a0ef', '#638ce9', '#4776e6', '#385ec0', '#2c4a99', '#213872', '#87a0ef'],
   },
   fontFamily: 'Open Sans, sans-serif',
   fontFamilyMonospace: 'PT Mono, monospace',
