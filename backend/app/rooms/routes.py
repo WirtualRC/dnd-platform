@@ -7,7 +7,7 @@ from PIL import Image, UnidentifiedImageError
 
 from ..extensions import db, socketio
 from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
-from ..utils.permissions import is_gm, require_character_owner_or_gm
+from ..utils.permissions import is_gm, is_character_owner, require_character_owner_or_gm
 
 rooms_bp = Blueprint('rooms', __name__)
 
@@ -236,7 +236,29 @@ def get_battle_map(room_id):
     requester_is_gm = is_gm(room_id, current_user.id)
 
     objects = []
+    templates = []
     for token in sorted(battle_map.tokens, key=lambda t: t.layer):
+        if token.template:
+            # представления приватны: видит создатель, владелец привязанного
+            # персонажа, и GM (тому нужен полный обзор) — остальные не должны
+            # получить их даже в сыром JSON, не только скрыть в интерфейсе
+            is_visible = token.created_by_user_id == current_user.id or (
+                token.character_id and is_character_owner(token.character_id, current_user.id)
+            )
+            if not is_visible:
+                continue
+            templates.append({
+                "id": token.id,
+                "battle_map_id": token.battle_map_id,
+                "kind": token.template_kind,
+                "character_id": token.character_id,
+                "character_name": token.character.name if token.character else None,
+                "label": token.label,
+                "image_url": token.image_url,
+                "created_by_user_id": token.created_by_user_id,
+            })
+            continue
+
         if not requester_is_gm and not token.visible_to_players:
             continue
 
@@ -271,6 +293,7 @@ def get_battle_map(room_id):
         "width": battle_map.width,
         "height": battle_map.height,
         "objects": objects,
+        "templates": templates,
     }), 200
 
 

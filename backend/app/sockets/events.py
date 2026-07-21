@@ -5,12 +5,58 @@ from flask_socketio import emit, join_room as sio_join_room, leave_room as sio_l
 
 from ..extensions import db, socketio
 from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap
-from ..utils.dice import roll, InvalidDiceFormula, ALLOWED_SIDES
+from ..utils.dice import roll, InvalidDiceFormula
 from ..utils.permissions import is_gm, is_character_owner
 
 
 def _is_member(room_id: int, user_id: int) -> bool:
     return RoomMembership.query.filter_by(room_id=room_id, user_id=user_id).first() is not None
+
+
+def _serialize_placed_token(token):
+    """Общая форма для token_added — используется и обычным token_add, и
+    place_template (клонирование представления на карту), чтобы фронтенд
+    рендерил токен одинаково независимо от способа его появления."""
+    live_sheet = token.instance_data if token.instance_data is not None else (
+        token.character.sheet_data if token.character else None
+    )
+    vitality = (live_sheet or {}).get('vitality', {})
+    return {
+        'id': token.id,
+        'battle_map_id': token.battle_map_id,
+        'character_id': token.character_id,
+        'character_name': token.character.name if token.character else None,
+        'created_by_user_id': token.created_by_user_id,
+        'label': token.label,
+        'image_url': token.image_url,
+        'pos_x': token.pos_x,
+        'pos_y': token.pos_y,
+        'width': token.width,
+        'height': token.height,
+        'rotation': token.rotation,
+        'layer': token.layer,
+        'locked': token.locked,
+        'visible_to_players': token.visible_to_players,
+        'is_instance': token.instance_data is not None,
+        'hp_current': vitality.get('hp_current'),
+        'hp_max': vitality.get('hp_max'),
+        'ac': vitality.get('ac'),
+    }
+
+
+def _serialize_template(token):
+    """Представление — заготовка со своей иконкой, ещё не размещённая на
+    карте. Позиция/поворот/HP тут бессмысленны и намеренно не отдаются."""
+    return {
+        'id': token.id,
+        'battle_map_id': token.battle_map_id,
+        'kind': token.template_kind,
+        'character_id': token.character_id,
+        'character_name': token.character.name if token.character else None,
+        'label': token.label,
+        'image_url': token.image_url,
+        'created_by_user_id': token.created_by_user_id,
+    }
 
 
 @socketio.on('connect')
@@ -30,6 +76,7 @@ def handle_join_room(data):
         return
 
     sio_join_room(str(room_id))
+    sio_join_room(f'user_{room_id}_{current_user.id}')  # личный канал — адресные приватные рассылки
 
     membership = RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first()
     emit('room_joined', {
@@ -74,13 +121,8 @@ def handle_dice_roll(data):
         if not isinstance(bonus, int):
             emit('error', {'message': 'Для броска с преимуществом/помехой нужен целый bonus'})
             return
-        
-        sides = data.get('sides', 20)
-        if sides not in ALLOWED_SIDES:
-            emit('error', {'message': f'Неподдерживаемая кость: d{sides}'})
-            return
-        
-        r1, r2 = random.randint(1, sides), random.randint(1, sides)
+
+        r1, r2 = random.randint(1, 20), random.randint(1, 20)
         if advantage and not disadvantage:
             chosen, label = max(r1, r2), 'преимущество'
         elif disadvantage and not advantage:
@@ -90,9 +132,9 @@ def handle_dice_roll(data):
             chosen, label = r1, 'обычный бросок'
 
         sign = '+' if bonus >= 0 else '-'
-        final_formula = f"1d{sides}{sign}{abs(bonus)}"
+        final_formula = f"1d20{sign}{abs(bonus)}"
         final_total = chosen + bonus
-        final_breakdown = f"d{sides}[{r1}, {r2}] ({label}) {sign} {abs(bonus)}"
+        final_breakdown = f"d20[{r1}, {r2}] ({label}) {sign} {abs(bonus)}"
     else:
         formula = (data.get('formula') or '').strip()
         try:
@@ -219,32 +261,149 @@ def handle_token_add(data):
     db.session.add(token)
     db.session.commit()
 
-    live_sheet = token.instance_data if token.instance_data is not None else (
-        token.character.sheet_data if token.character else None
-    )
-    vitality = (live_sheet or {}).get('vitality', {})
+    emit('token_added', _serialize_placed_token(token), room=str(room_id))
 
-    emit('token_added', {
-        'id': token.id,
-        'battle_map_id': token.battle_map_id,
-        'character_id': token.character_id,
-        'character_name': token.character.name if token.character else None,
-        'created_by_user_id': token.created_by_user_id,
-        'label': token.label,
-        'image_url': token.image_url,
-        'pos_x': token.pos_x,
-        'pos_y': token.pos_y,
-        'width': token.width,
-        'height': token.height,
-        'rotation': token.rotation,
-        'layer': token.layer,
-        'locked': token.locked,
-        'visible_to_players': token.visible_to_players,
-        'is_instance': token.instance_data is not None,
-        'hp_current': vitality.get('hp_current'),
-        'hp_max': vitality.get('hp_max'),
-        'ac': vitality.get('ac'),
-    }, room=str(room_id))
+
+@socketio.on('template_create')
+def handle_template_create(data):
+    """Создаёт представление — ещё не размещённую на карте заготовку токена
+    со своей иконкой. Живёт в плавающей панели между играми (не расходуется
+    при перетаскивании — см. place_template), пока его явно не удалят."""
+    room_id = data.get('room_id')
+    battle_map_id = data.get('battle_map_id')
+    kind = data.get('kind')
+    character_id = data.get('character_id')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    if kind not in ('pc', 'npc'):
+        emit('error', {'message': "kind должен быть 'pc' или 'npc'"})
+        return
+
+    battle_map = BattleMap.query.get(battle_map_id)
+    if not battle_map or battle_map.room_id != room_id:
+        emit('error', {'message': 'Карта не найдена или не принадлежит этой комнате'})
+        return
+
+    if kind == 'pc' and character_id is None:
+        emit('error', {'message': "Представление на вкладке «Персонажи» обязательно привязывается к листу"})
+        return
+
+    character = None
+    if character_id is not None:
+        character = Character.query.get(character_id)
+        if character is None:
+            emit('error', {'message': 'Персонаж не найден'})
+            return
+        if not (is_character_owner(character_id, current_user.id) or is_gm(room_id, current_user.id)):
+            emit('error', {'message': 'Недостаточно прав привязать этого персонажа'})
+            return
+
+    template = Token(
+        battle_map_id=battle_map_id,
+        character_id=character.id if character else None,
+        created_by_user_id=current_user.id,
+        label=data.get('label') or (character.name if character else None),
+        image_url=data.get('image_url') or (character.avatar_url if character else None),
+        template=True,
+        template_kind=kind,
+    )
+    db.session.add(template)
+    db.session.commit()
+
+    # приватно: только создателю (его личный канал) и в GM-канал — если
+    # создатель сам GM, придёт дважды в один и тот же сокет, но это
+    # безобидно (фронтенд не даст задублировать по id)
+    payload = _serialize_template(template)
+    emit('template_created', payload, room=f'user_{room_id}_{current_user.id}')
+
+
+@socketio.on('template_delete')
+def handle_template_delete(data):
+    room_id = data.get('room_id')
+    template_id = data.get('template_id')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    template = Token.query.get(template_id)
+    if not template or not template.template or template.battle_map.room_id != room_id:
+        emit('error', {'message': 'Представление не найдено в этой комнате'})
+        return
+
+    # удалить может создатель представления, владелец привязанного
+    # персонажа, или GM — то же деление прав, что и у самих токенов
+    is_owner = template.character_id is not None and is_character_owner(template.character_id, current_user.id)
+    is_creator = template.created_by_user_id == current_user.id
+    if not (is_gm(room_id, current_user.id) or is_owner or is_creator):
+        emit('error', {'message': 'Недостаточно прав удалить это представление'})
+        return
+
+    creator_id = template.created_by_user_id
+    db.session.delete(template)
+    db.session.commit()
+
+    payload = {'template_id': template_id}
+    emit('template_deleted', payload, room=f'user_{room_id}_{creator_id}')
+
+
+@socketio.on('place_template')
+def handle_place_template(data):
+    """Перетаскивание представления на карту — клонирует его в реальный
+    размещённый токен (template=False), оригинал остаётся в панели.
+
+    Инстансирование решает НЕ клиент, а сама вкладка представления:
+    kind='pc'  — всегда живая связь 1:1, instance_data не создаётся (на
+                 этом будет держаться будущий "Отряд на карте").
+    kind='npc' — если есть character_id, ВСЕГДА снимок instance_data —
+                 то же правило, что и у явного as_instance=True в token_add.
+    """
+    room_id = data.get('room_id')
+    template_id = data.get('template_id')
+    pos_x = data.get('pos_x')
+    pos_y = data.get('pos_y')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    if not isinstance(pos_x, (int, float)) or not isinstance(pos_y, (int, float)):
+        emit('error', {'message': 'Некорректная точка размещения'})
+        return
+
+    template = Token.query.get(template_id)
+    if not template or not template.template or template.battle_map.room_id != room_id:
+        emit('error', {'message': 'Представление не найдено в этой комнате'})
+        return
+
+    if template.character_id is not None and not (
+        is_character_owner(template.character_id, current_user.id) or is_gm(room_id, current_user.id)
+    ):
+        emit('error', {'message': 'Недостаточно прав разместить токен этого персонажа'})
+        return
+
+    as_instance = template.template_kind == 'npc' and template.character_id is not None
+
+    token = Token(
+        battle_map_id=template.battle_map_id,
+        character_id=template.character_id,
+        instance_data=dict(template.character.sheet_data) if as_instance else None,
+        created_by_user_id=current_user.id,
+        label=template.label,
+        image_url=template.image_url,
+        pos_x=pos_x,
+        pos_y=pos_y,
+        width=data.get('width', 50),
+        height=data.get('height', 50),
+        layer=10,
+    )
+    db.session.add(token)
+    db.session.commit()
+
+    emit('token_added', _serialize_placed_token(token), room=str(room_id))
 
 
 @socketio.on('token_update_state')

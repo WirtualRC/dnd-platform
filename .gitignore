@@ -218,4 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 backend/structure.json
 backend/uploads/*
-frontend*
+# frontend*
+CLAUDE.md
