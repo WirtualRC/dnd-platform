@@ -9,6 +9,7 @@ import TemplatePanel from './TemplatePanel';
 import MapRoster from './MapRoster';
 import Hotbar from './Hotbar';
 import CombatDiceLog from './CombatDiceLog';
+import CursorModePanel from './CursorModePanel';
 
 export default function BattleMapView({ room }) {
   const navigate = useNavigate();
@@ -49,6 +50,7 @@ export default function BattleMapView({ room }) {
       <MapRoster roomId={room.id} canControl={canMoveToken} />
       <Hotbar roomId={room.id} />
       <CombatDiceLog />
+      <CursorModePanel />
 
       <div style={styles.topRight}>
         {controlledCharacterId && (

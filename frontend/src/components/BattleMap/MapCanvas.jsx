@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
-import { Stage, Layer, Line, Transformer } from 'react-konva';
+import { Stage, Layer, Line, Circle, Text, Transformer } from 'react-konva';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
 import { useRoomStore } from '../../store/useRoomStore';
 import { api, API_ORIGIN } from '../../api/client';
 import { getSocket } from '../../api/socket';
 import { throttle } from '../../utils/throttle';
+import { toFeet } from '../../utils/scale';
 import { pushPendingRollLabel } from '../../utils/pendingRollLabels';
 import TokenNode from './TokenNode';
 import AoeShape, { RangeRing } from './AoeShape';
@@ -18,6 +19,14 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [selectedId, setSelectedId] = useState(null);
   const [cursorWorld, setCursorWorld] = useState(null); // для отрисовки собственного превью прицеливания
+  const [rulerStart, setRulerStart] = useState(null); // world-точка зажатия в режиме линейки
+  const [rulerEnd, setRulerEnd] = useState(null);
+  const [pointerTrail, setPointerTrail] = useState([]); // собственный "хвост кометы" в режиме указателя
+  const isPointerDown = useRef(false);
+  const isMiddlePanning = useRef(false); // панорамирование средней кнопкой — работает в любом режиме
+  const lastPanPoint = useRef({ x: 0, y: 0 });
+  const remotePointerTrails = useRef({}); // { [userId]: [{x,y}, ...] } — буфер хвостов чужих указателей
+  const [, setRemoteTrailTick] = useState(0); // форс ре-рендер при обновлении буфера выше (он вне React state)
 
   const tokens = useBattleMapStore((s) => s.tokens);
   const gridSize = useBattleMapStore((s) => s.gridSize);
@@ -32,6 +41,8 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const setActiveAction = useBattleMapStore((s) => s.setActiveAction);
   const clearTargetPreview = useBattleMapStore((s) => s.clearTargetPreview);
   const remoteTargetPreviews = useBattleMapStore((s) => s.remoteTargetPreviews);
+  const activeTool = useBattleMapStore((s) => s.activeTool);
+  const remotePointers = useBattleMapStore((s) => s.remotePointers);
 
   const casterToken = controlledTokenId ? tokens[controlledTokenId] : null;
 
@@ -46,6 +57,33 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // при смене инструмента — сбросить незавершённую линейку/указатель; если
+  // указатель транслировался, сообщить остальным, что он убран
+  useEffect(() => {
+    setRulerStart(null);
+    setRulerEnd(null);
+    if (isPointerDown.current) {
+      isPointerDown.current = false;
+      setPointerTrail([]);
+      useBattleMapStore.getState().clearPointer(roomId);
+    }
+  }, [activeTool, roomId]);
+
+  // локальный буфер последних позиций каждого чужого указателя — стор хранит
+  // только самую свежую точку, "хвост кометы" собираем здесь же
+  useEffect(() => {
+    Object.entries(remotePointers).forEach(([userId, pos]) => {
+      const buf = remotePointerTrails.current[userId] || [];
+      buf.push({ x: pos.x, y: pos.y });
+      if (buf.length > 6) buf.shift();
+      remotePointerTrails.current[userId] = buf;
+    });
+    Object.keys(remotePointerTrails.current).forEach((userId) => {
+      if (!remotePointers[userId]) delete remotePointerTrails.current[userId];
+    });
+    setRemoteTrailTick((t) => t + 1);
+  }, [remotePointers]);
 
   useEffect(() => {
     if (!transformerRef.current) return;
@@ -152,15 +190,92 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
     }
   }, 50)).current;
 
-  function handleMouseMove() {
+  // трансляция собственного указателя остальным — троттлится так же, как
+  // и превью прицеливания; собственный "хвост" при этом обновляется
+  // локально безо всякого троттлинга, чтобы вести себя плавно
+  const throttledPointerUpdate = useRef(throttle((worldPos, currentRoomId) => {
+    useBattleMapStore.getState().broadcastPointerMove(currentRoomId, worldPos.x, worldPos.y);
+  }, 50)).current;
+
+  function getPointerWorld() {
     const stage = stageRef.current;
     const pointer = stage.getPointerPosition();
-    if (!pointer) return;
+    if (!pointer) return null;
     const scale = stage.scaleX();
-    const world = { x: (pointer.x - stage.x()) / scale, y: (pointer.y - stage.y()) / scale };
+    return { x: (pointer.x - stage.x()) / scale, y: (pointer.y - stage.y()) / scale };
+  }
+
+  function handleMouseMove(e) {
+    if (isMiddlePanning.current) {
+      const dx = e.evt.clientX - lastPanPoint.current.x;
+      const dy = e.evt.clientY - lastPanPoint.current.y;
+      lastPanPoint.current = { x: e.evt.clientX, y: e.evt.clientY };
+      const stage = stageRef.current;
+      stage.position({ x: stage.x() + dx, y: stage.y() + dy });
+      stage.batchDraw();
+      return;
+    }
+
+    const world = getPointerWorld();
+    if (!world) return;
     lastWorldPos.current = world;
     throttledCursorUpdate(world, roomId);
+
+    if (activeTool === 'ruler' && rulerStart) {
+      setRulerEnd(world);
+    } else if (activeTool === 'pointer' && isPointerDown.current) {
+      setPointerTrail((trail) => [...trail, world].slice(-6));
+      throttledPointerUpdate(world, roomId);
+    }
   }
+
+  // средняя кнопка панорамирует карту независимо от выбранного режима
+  // курсора (линейка/указатель тоже используют зажатую мышь, но только
+  // левую кнопку — конфликта нет)
+  function handleStageMouseDown(e) {
+    if (e.evt.button === 1) {
+      e.evt.preventDefault();
+      isMiddlePanning.current = true;
+      lastPanPoint.current = { x: e.evt.clientX, y: e.evt.clientY };
+      return;
+    }
+    if (e.evt.button !== 0) return;
+    if (activeAction) return; // прицеливание заклинанием обрабатывается кликом, не влезаем
+    if (activeTool === 'ruler') {
+      const world = getPointerWorld();
+      if (!world) return;
+      setRulerStart(world);
+      setRulerEnd(world);
+    } else if (activeTool === 'pointer') {
+      const world = getPointerWorld();
+      if (!world) return;
+      isPointerDown.current = true;
+      setPointerTrail([world]);
+      throttledPointerUpdate(world, roomId);
+    }
+  }
+
+  function handleStageMouseUp() {
+    if (isMiddlePanning.current) {
+      isMiddlePanning.current = false;
+      return;
+    }
+    if (activeTool === 'ruler') {
+      setRulerStart(null);
+      setRulerEnd(null);
+    } else if (activeTool === 'pointer' && isPointerDown.current) {
+      isPointerDown.current = false;
+      setPointerTrail([]);
+      useBattleMapStore.getState().clearPointer(roomId);
+    }
+  }
+
+  // отпускание кнопки мыши за пределами Stage (например, курсор увели с
+  // канваса) должно так же завершать панорамирование/линейку/указатель
+  useEffect(() => {
+    window.addEventListener('mouseup', handleStageMouseUp);
+    return () => window.removeEventListener('mouseup', handleStageMouseUp);
+  }, [activeTool, roomId]);
 
   function confirmTarget() {
     const action = activeAction;
@@ -176,6 +291,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   }
 
   function handleStageClick(e) {
+    if (e.evt.button !== 0) return; // средняя/правая кнопка — не клик по карте
     if (e.target !== stageRef.current) return; // клик по токену обработает сам токен
     if (activeAction) {
       confirmTarget();
@@ -216,7 +332,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   return (
     <div
       ref={containerRef}
-      style={{ width: '100%', height: '100%', cursor: activeAction ? 'crosshair' : 'default' }}
+      style={{ width: '100%', height: '100%', cursor: (activeAction || activeTool !== 'pan') ? 'crosshair' : 'default' }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
     >
@@ -224,10 +340,12 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
         ref={stageRef}
         width={viewport.width}
         height={viewport.height}
-        draggable={!activeAction}
+        draggable={activeTool === 'pan' && !activeAction}
         onWheel={handleWheel}
         onClick={handleStageClick}
         onMouseMove={handleMouseMove}
+        onMouseDown={handleStageMouseDown}
+        onMouseUp={handleStageMouseUp}
       >
         <Layer>{gridLines}</Layer>
         <Layer>
@@ -236,7 +354,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
               key={token.id}
               token={token}
               shapeRef={(node) => { if (node) tokenRefs.current[token.id] = node; }}
-              canMove={canMoveToken(token) && !activeAction}
+              canMove={canMoveToken(token) && !activeAction && activeTool === 'pan'}
               onSelect={() => handleTokenClick(token)}
               onDragMove={(id, x, y) => moveTokenLive(roomId, id, x, y)}
               onDragEnd={(id, x, y) => commitTokenTransform(roomId, id, { pos_x: x, pos_y: y })}
@@ -292,6 +410,46 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
                 gridSize={gridSize} fill="rgba(136,136,136,0.15)" stroke="#888"
               />
             );
+          })}
+
+          {/* линейка — только локально, видит лишь тот, кто ей пользуется */}
+          {activeTool === 'ruler' && rulerStart && rulerEnd && (() => {
+            const dx = rulerEnd.x - rulerStart.x;
+            const dy = rulerEnd.y - rulerStart.y;
+            const feet = Math.round(toFeet(Math.sqrt(dx * dx + dy * dy), gridSize));
+            return (
+              <>
+                <Line points={[rulerStart.x, rulerStart.y, rulerEnd.x, rulerEnd.y]} stroke="#e0c674" strokeWidth={2} dash={[6, 4]} />
+                <Circle x={rulerStart.x} y={rulerStart.y} radius={4} fill="#e0c674" />
+                <Text
+                  x={(rulerStart.x + rulerEnd.x) / 2 + 8} y={(rulerStart.y + rulerEnd.y) / 2 - 8}
+                  text={`${feet} фт`} fontSize={14} fill="#e0c674"
+                />
+              </>
+            );
+          })()}
+
+          {/* собственный указатель — хвост кометы из последних точек курсора */}
+          {activeTool === 'pointer' && pointerTrail.map((p, i) => (
+            <Circle
+              key={`own-${i}`} x={p.x} y={p.y}
+              radius={2 + (5 * (i + 1)) / pointerTrail.length}
+              opacity={(i + 1) / pointerTrail.length}
+              fill="#7fd6ff"
+            />
+          ))}
+
+          {/* указатели остальных участников комнаты */}
+          {Object.entries(remotePointers).flatMap(([userId, pos]) => {
+            const trail = remotePointerTrails.current[userId] || [{ x: pos.x, y: pos.y }];
+            return trail.map((p, i) => (
+              <Circle
+                key={`${userId}-${i}`} x={p.x} y={p.y}
+                radius={2 + (5 * (i + 1)) / trail.length}
+                opacity={(i + 1) / trail.length}
+                fill="#ff9f6c"
+              />
+            ));
           })}
         </Layer>
       </Stage>

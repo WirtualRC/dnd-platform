@@ -1,10 +1,5 @@
 import { Circle, Rect, Wedge } from 'react-konva';
-
-const FEET_PER_CELL = 5;
-
-function toPx(feet, gridSize) {
-  return ((feet || 0) / FEET_PER_CELL) * gridSize;
-}
+import { toPx } from '../../utils/scale';
 
 export function RangeRing({ casterX, casterY, rangeFeet, gridSize, stroke = '#a89e8c' }) {
   if (casterX == null || casterY == null || !rangeFeet) return null;

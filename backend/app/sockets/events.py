@@ -723,6 +723,36 @@ def handle_spell_target_clear(data):
     }, room=str(room_id), include_self=False)
 
 
+@socketio.on('pointer_move')
+def handle_pointer_move(data):
+    """Живой курсор-указатель — тот же принцип, что и spell_target_preview:
+    никогда не пишет в БД, просто ретранслирует остальным участникам, пока
+    зажата кнопка мыши в режиме "указатель". Доступно любому участнику
+    комнаты, без проверки владения токеном/персонажем. Намеренно тихо
+    игнорирует некорректные вызовы без emit('error', ...) — высокочастотное
+    событие на каждое движение мыши."""
+    room_id = data.get('room_id')
+    if not room_id or not _is_member(room_id, current_user.id):
+        return
+
+    emit('pointer_moved', {
+        'user_id': current_user.id,
+        'username': current_user.username,
+        'x': data.get('x'),
+        'y': data.get('y'),
+    }, room=str(room_id), include_self=False)
+
+
+@socketio.on('pointer_clear')
+def handle_pointer_clear(data):
+    """Отпустили кнопку мыши в режиме "указатель" — убрать точку у остальных."""
+    room_id = data.get('room_id')
+    if not room_id or not _is_member(room_id, current_user.id):
+        return
+
+    emit('pointer_cleared', {'user_id': current_user.id}, room=str(room_id), include_self=False)
+
+
 @socketio.on('character_update_state')
 def handle_character_update_state(data):
     """Правка боевого состояния персонажа НАПРЯМУЮ, без токена на карте —

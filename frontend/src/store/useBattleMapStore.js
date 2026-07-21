@@ -28,6 +28,23 @@ export const useBattleMapStore = create((set, get) => ({
   activeAction: null,
   setActiveAction(action) { set({ activeAction: action }); },
 
+  // режим курсора на плавающей панели справа: 'pan' — обычное
+  // перемещение камеры (по умолчанию), 'ruler' — линейка, 'pointer' —
+  // указатель, видимый остальным участникам комнаты
+  activeTool: 'pan',
+  setActiveTool(tool) { set({ activeTool: tool }); },
+
+  // указатели ДРУГИХ участников — ключ user_id
+  remotePointers: {},
+
+  broadcastPointerMove(roomId, x, y) {
+    getSocket().emit('pointer_move', { room_id: roomId, x, y });
+  },
+
+  clearPointer(roomId) {
+    getSocket().emit('pointer_clear', { room_id: roomId });
+  },
+
   // превью прицеливания ДРУГИХ участников — ключ character_id, чтобы не
   // путать разных кастующих одновременно
   remoteTargetPreviews: {},
@@ -155,6 +172,23 @@ export const useBattleMapStore = create((set, get) => ({
         const remoteTargetPreviews = { ...state.remoteTargetPreviews };
         delete remoteTargetPreviews[data.character_id];
         return { remoteTargetPreviews };
+      });
+    });
+
+    socket.on('pointer_moved', (data) => {
+      set((state) => ({
+        remotePointers: {
+          ...state.remotePointers,
+          [data.user_id]: { x: data.x, y: data.y, username: data.username },
+        },
+      }));
+    });
+
+    socket.on('pointer_cleared', (data) => {
+      set((state) => {
+        const remotePointers = { ...state.remotePointers };
+        delete remotePointers[data.user_id];
+        return { remotePointers };
       });
     });
   },
