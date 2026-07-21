@@ -1,13 +1,10 @@
-import uuid
-from pathlib import Path
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
-from werkzeug.utils import secure_filename
-from PIL import Image, UnidentifiedImageError
 
 from ..extensions import db, socketio
 from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
 from ..utils.permissions import is_gm, is_character_owner, require_character_owner_or_gm
+from ..utils.uploads import save_uploaded_image, InvalidImageUpload
 
 rooms_bp = Blueprint('rooms', __name__)
 
@@ -319,14 +316,6 @@ def get_character_full_in_room(room_id, char_id):
     }), 200
 
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-ALLOWED_MIMETYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
-
-
-def _allowed_extension(filename: str) -> bool:
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
 @rooms_bp.route('/<int:room_id>/images', methods=['POST'])
 @login_required
 def upload_image(room_id):
@@ -338,32 +327,9 @@ def upload_image(room_id):
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
-
-    if file.mimetype not in ALLOWED_MIMETYPES or not _allowed_extension(file.filename):
-        return jsonify({"error": "File type not allowed"}), 400
-
-    # content-type и расширение можно подделать — реальная проверка того,
-    # что байты действительно являются валидным изображением, через Pillow
     try:
-        img = Image.open(file)
-        img.verify()
-        file.seek(0)  # verify() выжигает файловый объект, сбрасываем указатель
-    except (UnidentifiedImageError, OSError):
-        return jsonify({"error": "Invalid image file"}), 400
+        url = save_uploaded_image(request.files['file'], f"room_{room.id}")
+    except InvalidImageUpload as e:
+        return jsonify({"error": str(e)}), 400
 
-    # secure_filename режет путь/расширение до безопасного, но само по себе
-    # не даёт непредсказуемости — оригинальное имя всё ещё узнаваемо и
-    # потенциально угадываемо, поэтому префиксуем uuid4
-    safe_original = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4().hex}_{safe_original}"
-
-    upload_dir = Path(current_app.config['UPLOAD_DIR']) / f"room_{room.id}"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    file.save(upload_dir / unique_filename)
-
-    return jsonify({
-        "url": f"/uploads/room_{room.id}/{unique_filename}",
-    }), 201
+    return jsonify({"url": url}), 201

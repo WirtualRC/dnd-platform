@@ -61,6 +61,24 @@ export function rollAndNotify(label, bonus, opts = {}) {
   });
 }
 
+// Бросок за персонажа в конкретной комнате, без оглядки на
+// useRoomStore.broadcastCharacterId — используется мини-карточкой отряда
+// на боевой карте, где кликнуть можно на любого контролируемого
+// персонажа, а не только на того, чей лист сейчас открыт на вкладке.
+// Бросок всегда решает сервер (см. комментарий в rollAndNotify).
+export function rollAbilityCheckInRoom(roomId, characterId, label, bonus, opts = {}) {
+  pushPendingRollLabel(label);
+  const payload = { room_id: roomId, character_id: characterId };
+  if (opts.advantage || opts.disadvantage) {
+    payload.bonus = bonus;
+    payload.advantage = !!opts.advantage;
+    payload.disadvantage = !!opts.disadvantage;
+  } else {
+    payload.formula = `1d20${bonus >= 0 ? '+' : ''}${bonus}`;
+  }
+  getSocket().emit('dice_roll', payload);
+}
+
 // Бросок произвольной формулы урона (не d20) — та же логика: в контексте
 // вещания формула улетает на сервер вместо локального счёта.
 export function rollFormulaAndNotify(label, formula) {

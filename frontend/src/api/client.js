@@ -3,6 +3,14 @@
 // легко забыть в одном из десятков разбросанных по компонентам fetch().
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api/v1';
 
+// сервер отдаёт url загруженных файлов как путь от корня ("/uploads/...",
+// см. UPLOAD_DIR в backend/app/config.py) — это нужно достраивать до
+// корневого origin бэкенда, а не API_BASE (у которого есть /api/v1), и уж
+// точно не оставлять как есть: relative url в <img src> резолвится
+// относительно текущей страницы, то есть в дев-режиме против vite (5173),
+// где никакого /uploads нет
+const API_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, '');
+
 class ApiError extends Error {
   constructor(message, status) {
     super(message);
@@ -43,4 +51,4 @@ export const api = {
   },
 };
 
-export { ApiError, API_BASE };
+export { ApiError, API_BASE, API_ORIGIN };

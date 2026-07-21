@@ -46,7 +46,11 @@ export default function CharacterSheetPage() {
   const [spellModalOpen, setSpellModalOpen] = useState(false);
   const [spellcastingModalOpen, setSpellcastingModalOpen] = useState(false);
 
-  useEffect(() => { loadCharacter(id); }, [id]);
+  // room_id из текущей комнаты (если есть) — бэкенд принимает его как
+  // подтверждение прав GM на чужого персонажа (см. characters/routes.py:
+  // _can_edit_character). Для владельца ничего не меняет: он и так может
+  // редактировать своих персонажей, room_id тогда просто игнорируется.
+  useEffect(() => { loadCharacter(id, useRoomStore.getState().current?.id); }, [id]);
 
   // Открытие карточки в библиотеке (не через иконку-глаз) означает "хочу
   // играть этим персонажем" — если сейчас есть комната, персонаж становится

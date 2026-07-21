@@ -21,37 +21,42 @@ export default function TemplatePanel({ roomId }) {
   const shown = templates.filter((t) => t.kind === tab);
 
   return (
-    <div style={styles.panel}>
-      <div style={styles.tabs}>
-        <button className={tab === 'pc' ? '' : 'secondary'} onClick={() => setTab('pc')}>Персонажи</button>
-        <button className={tab === 'npc' ? '' : 'secondary'} onClick={() => setTab('npc')}>NPC / саммоны</button>
-        <button className="ghost" onClick={() => setModalOpen(true)} title="Новое представление">+</button>
-      </div>
+    <div style={{ display: 'contents' }}>
+      <div style={styles.panel}>
+        <div style={styles.tabs}>
+          <button className={tab === 'pc' ? '' : 'secondary'} onClick={() => setTab('pc')}>Персонажи</button>
+          <button className={tab === 'npc' ? '' : 'secondary'} onClick={() => setTab('npc')}>NPC / саммоны</button>
+          <button className="ghost" onClick={() => setModalOpen(true)} title="Новое представление">+</button>
+        </div>
 
-      <div style={styles.icons}>
-        {shown.map((t) => {
-          const isPlaced = tab === 'pc' && t.character_id && placedCharacterIds.has(t.character_id);
-          return (
-            <div
-              key={t.id}
-              draggable={!isPlaced}
-              onDragStart={(e) => { if (!isPlaced) e.dataTransfer.setData('text/template-id', String(t.id)); }}
-              style={{ ...styles.icon, opacity: isPlaced ? 0.35 : 1, cursor: isPlaced ? 'not-allowed' : 'grab' }}
-              title={isPlaced ? `${t.label} уже на карте` : (t.label || 'Представление')}
-            >
-              <div style={{ ...styles.iconImg, backgroundImage: t.image_url ? `url(${t.image_url})` : 'none' }}>
-                {!t.image_url && <span style={styles.iconInitial}>{(t.label || '?')[0]}</span>}
+        <div style={styles.icons}>
+          {shown.map((t) => {
+            const isPlaced = tab === 'pc' && t.character_id && placedCharacterIds.has(t.character_id);
+            return (
+              <div
+                key={t.id}
+                draggable={!isPlaced}
+                onDragStart={(e) => { if (!isPlaced) e.dataTransfer.setData('text/template-id', String(t.id)); }}
+                style={{ ...styles.icon, opacity: isPlaced ? 0.35 : 1, cursor: isPlaced ? 'not-allowed' : 'grab' }}
+                title={isPlaced ? `${t.label} уже на карте` : (t.label || 'Представление')}
+              >
+                <div style={{ ...styles.iconImg, backgroundImage: t.image_url ? `url(${t.image_url})` : 'none' }}>
+                  {!t.image_url && <span style={styles.iconInitial}>{(t.label || '?')[0]}</span>}
+                </div>
+                <button
+                  className="ghost" style={styles.removeBtn}
+                  onClick={() => deleteTemplate(roomId, t.id)} title="Удалить представление"
+                >✕</button>
               </div>
-              <button
-                className="ghost" style={styles.removeBtn}
-                onClick={() => deleteTemplate(roomId, t.id)} title="Удалить представление"
-              >✕</button>
-            </div>
-          );
-        })}
-        {shown.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Пусто — нажми «+»</span>}
+            );
+          })}
+          {shown.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Пусто — нажми «+»</span>}
+        </div>
       </div>
 
+      {/* отдельная плавающая панель вне styles.panel — у него transform,
+          который создаёт containing block и обрезал бы её (см. историю
+          правок этого файла) */}
       <TemplateModal opened={modalOpen} onClose={() => setModalOpen(false)} roomId={roomId} kind={tab} />
     </div>
   );

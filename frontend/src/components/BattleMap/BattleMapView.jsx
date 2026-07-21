@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useRoomStore } from '../../store/useRoomStore';
 import { useCharacterStore } from '../../store/useCharacterStore';
@@ -7,10 +8,13 @@ import MapCanvas from './MapCanvas';
 import TemplatePanel from './TemplatePanel';
 import MapRoster from './MapRoster';
 import Hotbar from './Hotbar';
+import CombatDiceLog from './CombatDiceLog';
 
 export default function BattleMapView({ room }) {
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const setMode = useRoomStore((s) => s.setMode);
+  const controlledCharacterId = useBattleMapStore((s) => s.controlledCharacterId);
   const { characters, loadCharacters } = useCharacterStore();
   const { loadBattleMap, attachSocketListeners, placeTemplate } = useBattleMapStore();
 
@@ -42,10 +46,23 @@ export default function BattleMapView({ room }) {
       />
 
       <TemplatePanel roomId={room.id} />
-      <MapRoster canControl={canMoveToken} />
+      <MapRoster roomId={room.id} canControl={canMoveToken} />
       <Hotbar roomId={room.id} />
+      <CombatDiceLog />
 
       <div style={styles.topRight}>
+        {controlledCharacterId && (
+          // в бою карта занимает весь экран (см. RoomView) — без этой кнопки
+          // из боя вообще нельзя попасть на лист персонажа, чтобы кинуть
+          // бросок атакой/заклинанием со спасброском или что угодно, чего
+          // нет в хотбаре. Ведёт на полноценный редактируемый лист даже для
+          // GM, управляющего чужим персонажем — CharacterSheetPage сама
+          // подставит room_id текущей комнаты, который бэкенд принимает как
+          // подтверждение GM-доступа (см. characters/routes.py)
+          <button className="secondary" onClick={() => navigate(`/characters/${controlledCharacterId}`)}>
+            Лист персонажа
+          </button>
+        )}
         {isGm ? (
           <button className="secondary" onClick={() => setMode('roleplay')}>Закончить бой</button>
         ) : (
@@ -58,6 +75,6 @@ export default function BattleMapView({ room }) {
 
 const styles = {
   fullscreen: { position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 100, overflow: 'hidden' },
-  topRight: { position: 'absolute', top: 12, right: 12, zIndex: 10 },
+  topRight: { position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8 },
   modeBadge: { fontSize: 12, color: 'var(--text-dim)', background: 'var(--surface-1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 8 },
 };

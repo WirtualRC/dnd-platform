@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Modal, TextInput, Textarea, Checkbox, NumberInput, Select, Stack, Group, Button, Divider, Switch } from '@mantine/core';
 import { MODIFIER_TARGETS } from '../../utils/dnd';
 import AoeField from './AoeField';
+import IconUploadField from './IconUploadField';
 
 const MODIFIER_TYPE_OPTIONS = [
   { value: 'bonus', label: 'Бонус (число)' },
@@ -22,6 +23,16 @@ export default function ItemModal({ opened, onClose, item, onSave, onDelete }) {
 
   function patch(fields) { setDraft((d) => ({ ...d, ...fields })); }
   function save() { onSave(draft); onClose(); }
+
+  // иконка сохраняется сразу по загрузке, а не по кнопке "Сохранить" внизу —
+  // иначе загрузка выглядит как законченное действие (превью меняется
+  // мгновенно), а на деле пропадала бы при закрытии модалки без явного
+  // сохранения остальных полей (см. тот же баг с аватаром персонажа)
+  function saveIcon(icon_url) {
+    const next = { ...draft, usable: { ...draft.usable, icon_url } };
+    setDraft(next);
+    onSave(next);
+  }
 
   return (
     <Modal
@@ -77,10 +88,15 @@ export default function ItemModal({ opened, onClose, item, onSave, onDelete }) {
         <Switch
           label="Расходуется в бою — добавить в хотбар"
           checked={!!draft.usable}
-          onChange={(e) => patch({ usable: e.currentTarget.checked ? { type: 'spell', damage: '', range: null, aoe: null } : null })}
+          onChange={(e) => patch({ usable: e.currentTarget.checked ? { type: 'spell', damage: '', range: null, aoe: null, icon_url: null } : null })}
         />
         {draft.usable && (
           <>
+            <IconUploadField
+              label="Иконка (для хотбара)"
+              value={draft.usable.icon_url}
+              onChange={saveIcon}
+            />
             <Group grow>
               <Select
                 label="Тип" data={[{ value: 'attack', label: 'Атака' }, { value: 'spell', label: 'Эффект' }]}

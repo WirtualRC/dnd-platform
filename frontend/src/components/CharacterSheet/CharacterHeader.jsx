@@ -3,6 +3,7 @@ import { Paper, Avatar, TextInput, Modal, Group, Stack, UnstyledButton } from '@
 import EditableNumberStat from './EditableNumberStat';
 import RaceClassStat from './RaceClassStat';
 import HpStat from './HpStat';
+import IconUploadField from './IconUploadField';
 
 export default function CharacterHeader({ current, sheet, updateName, updateAvatarUrl, set }) {
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
@@ -49,13 +50,7 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
       </Group>
 
       <Modal opened={avatarModalOpen} onClose={() => setAvatarModalOpen(false)} title="Аватар" centered size="xs" closeButtonProps={{ 'aria-label': 'Закрыть' }}>
-        <TextInput
-          label="URL картинки"
-          value={current.avatar_url || ''}
-          onChange={(e) => updateAvatarUrl(e.target.value)}
-          autoFocus
-          placeholder="https://..."
-        />
+        <IconUploadField value={current.avatar_url} onChange={updateAvatarUrl} size={64} />
       </Modal>
     </Paper>
   );

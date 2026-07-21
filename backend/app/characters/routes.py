@@ -2,9 +2,38 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
 from ..extensions import db, socketio
-from ..models import Character, RoomMembership
+from ..models import Character, RoomMembership, CharacterRoomLink, Token, BattleMap
+from ..utils.permissions import is_gm
+from ..utils.uploads import save_uploaded_image, InvalidImageUpload
 
 characters_bp = Blueprint('characters', __name__)
+
+
+def _character_linked_to_room(character_id: int, room_id: int) -> bool:
+    """Персонаж реально относится к этой комнате — либо формально в
+    ростере (CharacterRoomLink), либо просто стоит токеном на её карте
+    (тот же критерий, что и в get_character_full_in_room): GM может вести
+    бой персонажем игрока, ни разу не добавленным в ростер явно."""
+    if CharacterRoomLink.query.filter_by(character_id=character_id, room_id=room_id).first():
+        return True
+    return (
+        Token.query.join(BattleMap)
+        .filter(BattleMap.room_id == room_id, Token.character_id == character_id)
+        .first()
+        is not None
+    )
+
+
+def _can_edit_character(character: Character, room_id) -> bool:
+    """Владелец — всегда. GM — только в контексте своей же комнаты
+    (room_id из query, не с потолка) и только если персонаж действительно
+    в этой комнате — иначе GM любой комнаты мог бы редактировать чужого
+    персонажа, просто подставив свой room_id к чужому char_id в URL."""
+    if character.owner_id == current_user.id:
+        return True
+    if room_id is None:
+        return False
+    return is_gm(room_id, current_user.id) and _character_linked_to_room(character.id, room_id)
 
 
 @characters_bp.route('', methods=['GET'])
@@ -29,9 +58,15 @@ def get_my_characters():
 @characters_bp.route('/<int:char_id>', methods=['GET'])
 @login_required
 def get_character(char_id):
-    """Получение одного персонажа для редактирования на странице листа."""
+    """Получение одного персонажа для редактирования на странице листа.
+
+    ?room_id=<id> — опциональный контекст: GM комнаты открывает лист
+    персонажа игрока (например с боевой карты) с теми же правами на
+    просмотр и редактирование, что и у владельца. Без room_id — обычная
+    личная библиотека, доступна только владельцу."""
     character = Character.query.get_or_404(char_id)
-    if character.owner_id != current_user.id:
+    room_id = request.args.get('room_id', type=int)
+    if not _can_edit_character(character, room_id):
         return jsonify({"error": "Permission denied"}), 403
 
     return jsonify({
@@ -41,6 +76,30 @@ def get_character(char_id):
         "sheet_data": character.sheet_data,
         "updated_at": character.updated_at.isoformat()
     }), 200
+
+
+@characters_bp.route('/<int:char_id>/images', methods=['POST'])
+@login_required
+def upload_character_image(char_id):
+    """Загрузка картинки для листа персонажа: аватар самого персонажа или
+    иконка конкретного действия/предмета (кладётся в sheet_data обычным
+    PUT после того, как фронт получит url отсюда). ?room_id= — тот же
+    GM-контекст, что и у GET/PUT (см. _can_edit_character) — иконки для
+    хотбара GM тоже может поставить персонажу игрока, ведя его в бою."""
+    character = Character.query.get_or_404(char_id)
+    room_id = request.args.get('room_id', type=int)
+    if not _can_edit_character(character, room_id):
+        return jsonify({"error": "Permission denied"}), 403
+
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    try:
+        url = save_uploaded_image(request.files['file'], f"characters/{char_id}")
+    except InvalidImageUpload as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"url": url}), 201
 
 
 @characters_bp.route('', methods=['POST'])
@@ -85,10 +144,12 @@ def create_character():
 @characters_bp.route('/<int:char_id>', methods=['PUT'])
 @login_required
 def update_character(char_id):
-    """Обновление данных моего персонажа."""
+    """Обновление персонажа — своего, либо (с ?room_id=) персонажа игрока
+    из комнаты, где current_user — GM (см. _can_edit_character)."""
     character = Character.query.get_or_404(char_id)
+    room_id = request.args.get('room_id', type=int)
 
-    if character.owner_id != current_user.id:
+    if not _can_edit_character(character, room_id):
         return jsonify({"error": "Permission denied"}), 403
 
     data = request.get_json()

@@ -2,14 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { Stage, Layer, Line, Transformer } from 'react-konva';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
 import { useRoomStore } from '../../store/useRoomStore';
-import { api, API_BASE } from '../../api/client';
+import { api, API_ORIGIN } from '../../api/client';
 import { getSocket } from '../../api/socket';
 import { throttle } from '../../utils/throttle';
 import { pushPendingRollLabel } from '../../utils/pendingRollLabels';
 import TokenNode from './TokenNode';
 import AoeShape, { RangeRing } from './AoeShape';
-
-const API_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, '');
 
 export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const containerRef = useRef(null);

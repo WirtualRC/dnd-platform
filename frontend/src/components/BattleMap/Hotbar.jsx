@@ -63,7 +63,13 @@ function Section({ items, activeId, onClick }) {
   return (
     <div style={styles.section}>
       {items.map((item) => (
-        <HotbarIcon key={item.id} label={item.name} active={activeId === item.id} onClick={() => onClick(item)} />
+        <HotbarIcon
+          key={item.id}
+          label={item.name}
+          iconUrl={item.icon_url || item.usable?.icon_url}
+          active={activeId === item.id}
+          onClick={() => onClick(item)}
+        />
       ))}
     </div>
   );

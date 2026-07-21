@@ -50,7 +50,6 @@ class DiceRollResult:
 
 def roll(formula: str) -> DiceRollResult:
     """Парсит и кидает формулу. Бросает InvalidDiceFormula при некорректном вводе."""
-    print("sdfsdfsd")
     if not formula or len(formula) > 200:
         raise InvalidDiceFormula("Пустая или слишком длинная формула")
 
