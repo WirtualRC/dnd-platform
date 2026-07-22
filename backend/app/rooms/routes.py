@@ -3,7 +3,7 @@ from flask_login import login_required, current_user
 
 from ..extensions import db, socketio
 from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
-from ..utils.permissions import is_gm, is_character_owner, require_character_owner_or_gm
+from ..utils.permissions import is_gm, is_character_owner, require_character_owner_or_gm, require_gm
 from ..utils.uploads import save_uploaded_image, InvalidImageUpload
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -43,7 +43,11 @@ def create_room():
 
     membership = RoomMembership(room_id=new_room.id, user_id=current_user.id, role=RoomRole.GM)
     db.session.add(membership)
-    db.session.add(BattleMap(room_id=new_room.id))
+
+    battle_map = BattleMap(room_id=new_room.id, name="Карта 1")
+    db.session.add(battle_map)
+    db.session.flush()
+    new_room.active_battle_map_id = battle_map.id
 
     try:
         db.session.commit()
@@ -216,15 +220,110 @@ def get_dice_history(room_id):
     return jsonify({"rolls": rolls}), 200
 
 
-@rooms_bp.route('/<int:room_id>/battle-map', methods=['GET'])
+@rooms_bp.route('/<int:room_id>/battle-maps', methods=['GET'])
 @login_required
-def get_battle_map(room_id):
+def list_battle_maps(room_id):
+    """Список карт комнаты для переключателя — без токенов, только id/имя."""
     room = Room.query.get_or_404(room_id)
     if not RoomMembership.query.filter_by(room_id=room.id, user_id=current_user.id).first():
         return jsonify({"error": "Access denied"}), 403
 
-    battle_map = room.battle_map
-    if not battle_map:
+    return jsonify({
+        "maps": [{"id": m.id, "name": m.name} for m in room.battle_maps],
+        "active_battle_map_id": room.active_battle_map_id,
+    }), 200
+
+
+@rooms_bp.route('/<int:room_id>/battle-maps', methods=['POST'])
+@require_gm
+def create_battle_map(room_id):
+    """Создать новую боевую карту в комнате. Не делает её активной —
+    переключение отдельное действие (сокет battle_map_switch), чтобы GM мог
+    заранее подготовить карту, не прерывая текущий бой у стола."""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({"error": "Название карты обязательно"}), 400
+    if len(name) > 100:
+        return jsonify({"error": "Название карты слишком длинное"}), 400
+
+    battle_map = BattleMap(room_id=room_id, name=name)
+    db.session.add(battle_map)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error creating battle map: {e}")
+        return jsonify({"error": "Failed to create battle map"}), 500
+
+    socketio.emit('battle_map_created', {
+        'room_id': room_id, 'id': battle_map.id, 'name': battle_map.name,
+    }, room=str(room_id))
+
+    return jsonify({"id": battle_map.id, "name": battle_map.name}), 201
+
+
+@rooms_bp.route('/<int:room_id>/battle-maps/<int:map_id>', methods=['PUT'])
+@require_gm
+def rename_battle_map(room_id, map_id):
+    battle_map = BattleMap.query.get_or_404(map_id)
+    if battle_map.room_id != room_id:
+        return jsonify({"error": "Battle map not found"}), 404
+
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({"error": "Название карты обязательно"}), 400
+    if len(name) > 100:
+        return jsonify({"error": "Название карты слишком длинное"}), 400
+
+    battle_map.name = name
+    db.session.commit()
+
+    socketio.emit('battle_map_renamed', {
+        'room_id': room_id, 'id': battle_map.id, 'name': battle_map.name,
+    }, room=str(room_id))
+
+    return jsonify({"id": battle_map.id, "name": battle_map.name}), 200
+
+
+@rooms_bp.route('/<int:room_id>/battle-maps/<int:map_id>', methods=['DELETE'])
+@require_gm
+def delete_battle_map(room_id, map_id):
+    room = Room.query.get_or_404(room_id)
+    battle_map = BattleMap.query.get_or_404(map_id)
+    if battle_map.room_id != room_id:
+        return jsonify({"error": "Battle map not found"}), 404
+
+    if len(room.battle_maps) <= 1:
+        return jsonify({"error": "Нельзя удалить последнюю карту комнаты"}), 400
+
+    # если удаляем активную карту — сразу назначаем активной другую, чтобы
+    # у комнаты не осталось "дырки": фронтенду всегда есть что показать
+    if room.active_battle_map_id == map_id:
+        fallback = next(m for m in room.battle_maps if m.id != map_id)
+        room.active_battle_map_id = fallback.id
+
+    db.session.delete(battle_map)  # каскадом унесёт все токены этой карты
+    db.session.commit()
+
+    socketio.emit('battle_map_deleted', {
+        'room_id': room_id, 'id': map_id,
+        'active_battle_map_id': room.active_battle_map_id,
+    }, room=str(room_id))
+
+    return jsonify({"active_battle_map_id": room.active_battle_map_id}), 200
+
+
+@rooms_bp.route('/<int:room_id>/battle-maps/<int:map_id>', methods=['GET'])
+@login_required
+def get_battle_map(room_id, map_id):
+    if not RoomMembership.query.filter_by(room_id=room_id, user_id=current_user.id).first():
+        return jsonify({"error": "Access denied"}), 403
+
+    battle_map = BattleMap.query.get_or_404(map_id)
+    if battle_map.room_id != room_id:
         return jsonify({"error": "Battle map not found"}), 404
 
     # скрытые от игроков токены (ловушки, засады) не должны утекать в
@@ -286,6 +385,7 @@ def get_battle_map(room_id):
 
     return jsonify({
         "id": battle_map.id,
+        "name": battle_map.name,
         "grid_size": battle_map.grid_size,
         "width": battle_map.width,
         "height": battle_map.height,

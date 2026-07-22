@@ -10,6 +10,7 @@ import MapRoster from './MapRoster';
 import Hotbar from './Hotbar';
 import CombatDiceLog from './CombatDiceLog';
 import CursorModePanel from './CursorModePanel';
+import BattleMapSwitcher from './BattleMapSwitcher';
 
 export default function BattleMapView({ room }) {
   const navigate = useNavigate();
@@ -17,11 +18,11 @@ export default function BattleMapView({ room }) {
   const setMode = useRoomStore((s) => s.setMode);
   const controlledCharacterId = useBattleMapStore((s) => s.controlledCharacterId);
   const { characters, loadCharacters } = useCharacterStore();
-  const { loadBattleMap, attachSocketListeners, placeTemplate } = useBattleMapStore();
+  const { loadMaps, attachSocketListeners, placeTemplate } = useBattleMapStore();
 
   useEffect(() => {
     attachSocketListeners();
-    loadBattleMap(room.id);
+    loadMaps(room.id);
     if (characters.length === 0) loadCharacters();
   }, [room.id]);
 
@@ -64,23 +65,26 @@ export default function BattleMapView({ room }) {
       <CursorModePanel />
 
       <div style={styles.topRight}>
-        {controlledCharacterId && (
-          // в бою карта занимает весь экран (см. RoomView) — без этой кнопки
-          // из боя вообще нельзя попасть на лист персонажа, чтобы кинуть
-          // бросок атакой/заклинанием со спасброском или что угодно, чего
-          // нет в хотбаре. Ведёт на полноценный редактируемый лист даже для
-          // GM, управляющего чужим персонажем — CharacterSheetPage сама
-          // подставит room_id текущей комнаты, который бэкенд принимает как
-          // подтверждение GM-доступа (см. characters/routes.py)
-          <button className="secondary" onClick={() => navigate(`/characters/${controlledCharacterId}`)}>
-            Лист персонажа
-          </button>
-        )}
-        {isGm ? (
-          <button className="secondary" onClick={() => setMode('roleplay')}>Закончить бой</button>
-        ) : (
-          <span style={styles.modeBadge}>Режим боя</span>
-        )}
+        <div style={styles.topRightRow}>
+          {controlledCharacterId && (
+            // в бою карта занимает весь экран (см. RoomView) — без этой кнопки
+            // из боя вообще нельзя попасть на лист персонажа, чтобы кинуть
+            // бросок атакой/заклинанием со спасброском или что угодно, чего
+            // нет в хотбаре. Ведёт на полноценный редактируемый лист даже для
+            // GM, управляющего чужим персонажем — CharacterSheetPage сама
+            // подставит room_id текущей комнаты, который бэкенд принимает как
+            // подтверждение GM-доступа (см. characters/routes.py)
+            <button className="secondary" onClick={() => navigate(`/characters/${controlledCharacterId}`)}>
+              Лист персонажа
+            </button>
+          )}
+          {isGm ? (
+            <button className="secondary" onClick={() => setMode('roleplay')}>Закончить бой</button>
+          ) : (
+            <span style={styles.modeBadge}>Режим боя</span>
+          )}
+        </div>
+        <BattleMapSwitcher roomId={room.id} isGm={isGm} />
       </div>
     </div>
   );
@@ -88,6 +92,7 @@ export default function BattleMapView({ room }) {
 
 const styles = {
   fullscreen: { position: 'fixed', inset: 0, background: 'var(--bg)', zIndex: 100, overflow: 'hidden' },
-  topRight: { position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8 },
+  topRight: { position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 },
+  topRightRow: { display: 'flex', alignItems: 'center', gap: 8 },
   modeBadge: { fontSize: 12, color: 'var(--text-dim)', background: 'var(--surface-1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 8 },
 };

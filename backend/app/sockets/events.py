@@ -201,6 +201,37 @@ def handle_mode_change(data):
     }, room=str(room_id))
 
 
+@socketio.on('battle_map_switch')
+def handle_battle_map_switch(data):
+    """Переключение активной карты комнаты — GM готовит несколько карт
+    заранее и переключается между ними, все участники видят одну и ту же
+    активную карту одновременно (тот же принцип, что и mode_change)."""
+    room_id = data.get('room_id')
+    battle_map_id = data.get('battle_map_id')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        emit('error', {'message': 'Только GM может переключать карту'})
+        return
+
+    battle_map = BattleMap.query.get(battle_map_id)
+    if not battle_map or battle_map.room_id != room_id:
+        emit('error', {'message': 'Карта не найдена или не принадлежит этой комнате'})
+        return
+
+    room = Room.query.get(room_id)
+    if not room:
+        emit('error', {'message': 'Комната не найдена'})
+        return
+
+    room.active_battle_map_id = battle_map_id
+    db.session.commit()
+
+    emit('battle_map_switched', {
+        'room_id': room_id,
+        'battle_map_id': battle_map_id,
+    }, room=str(room_id))
+
+
 @socketio.on('token_add')
 def handle_token_add(data):
     """Добавление токена на карту.

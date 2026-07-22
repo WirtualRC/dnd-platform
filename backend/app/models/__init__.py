@@ -94,11 +94,29 @@ class Room(db.Model):
         cascade="all, delete-orphan",
         order_by="DiceRoll.created_at",
     )
-    battle_map = db.relationship(
+    battle_maps = db.relationship(
         "BattleMap",
         back_populates="room",
-        uselist=False,  # одна активная карта на комнату
+        foreign_keys="BattleMap.room_id",
         cascade="all, delete-orphan",
+        order_by="BattleMap.id",
+    )
+    # какая из battle_maps сейчас активна и показывается всей комнате при
+    # входе в бой — GM переключает через сокет-событие battle_map_switch.
+    # use_alter/post_update: между Room и BattleMap циклическая FK-связь
+    # (BattleMap.room_id -> rooms.id, это поле -> battle_maps.id), без них
+    # create_all() падает на Postgres с CircularDependencyError при попытке
+    # топологически упорядочить создание таблиц
+    active_battle_map_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            "battle_maps.id", ondelete="SET NULL", use_alter=True,
+            name="fk_room_active_battle_map",
+        ),
+        nullable=True,
+    )
+    active_battle_map = db.relationship(
+        "BattleMap", foreign_keys=[active_battle_map_id], post_update=True
     )
 
     def __repr__(self):
@@ -238,14 +256,15 @@ class DiceRoll(db.Model):
 
 
 class BattleMap(db.Model):
-    """Активная боевая карта комнаты. Одна на комнату — при следующем бое
-    можно либо переиспользовать, либо перезаписать background_image_url
-    и grid-параметры."""
+    """Боевая карта. Комната может иметь несколько карт (GM готовит разные
+    энкаунтеры заранее) — какая из них сейчас активна, хранится в
+    Room.active_battle_map_id, а не здесь."""
 
     __tablename__ = "battle_maps"
 
     id = db.Column(db.Integer, primary_key=True)
-    room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False, unique=True)
+    room_id = db.Column(db.Integer, db.ForeignKey("rooms.id"), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
     grid_size = db.Column(db.Integer, default=50, nullable=False)  # px на клетку
     # виртуальный размер карты в px — заметно больше видимого вьюпорта
     # (900x600), чтобы было куда панорамировать; не буквально бесконечно,
@@ -256,7 +275,7 @@ class BattleMap(db.Model):
         db.DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
-    room = db.relationship("Room", back_populates="battle_map")
+    room = db.relationship("Room", back_populates="battle_maps", foreign_keys=[room_id])
     tokens = db.relationship(
         "Token", back_populates="battle_map", cascade="all, delete-orphan"
     )

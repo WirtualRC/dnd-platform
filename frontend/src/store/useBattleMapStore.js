@@ -14,6 +14,12 @@ export const useBattleMapStore = create((set, get) => ({
   isLoading: false,
   error: null,
 
+  // список карт комнаты (для переключателя) и id активной — сама комната
+  // может иметь несколько подготовленных GM карт, но одновременно у всех
+  // участников открыта только одна, общая (см. battle_map_switch)
+  maps: [], // [{ id, name }]
+  activeMapId: null,
+
   // токен + персонаж, чей хотбар сейчас показан — выбирается кликом по
   // токену или по иконке в отряде. Токен нужен отдельно от character_id:
   // у двух инстансов одного NPC-представления (два одинаковых гоблина)
@@ -60,19 +66,59 @@ export const useBattleMapStore = create((set, get) => ({
     getSocket().emit('spell_target_clear', { room_id: roomId, character_id: characterId });
   },
 
-  async loadBattleMap(roomId) {
+  async loadMaps(roomId) {
     set({ isLoading: true, error: null });
     try {
-      const data = await api.get(`/rooms/${roomId}/battle-map`);
+      const data = await api.get(`/rooms/${roomId}/battle-maps`);
+      set({ maps: data.maps, activeMapId: data.active_battle_map_id });
+      if (data.active_battle_map_id) {
+        await get().loadBattleMap(roomId, data.active_battle_map_id);
+      } else {
+        set({ isLoading: false });
+      }
+    } catch (e) {
+      set({ error: e.message, isLoading: false });
+    }
+  },
+
+  async loadBattleMap(roomId, mapId) {
+    set({ isLoading: true, error: null });
+    try {
+      const data = await api.get(`/rooms/${roomId}/battle-maps/${mapId}`);
       const tokens = {};
       data.objects.forEach((t) => { tokens[t.id] = t; });
       set({
         mapId: data.id, gridSize: data.grid_size, width: data.width, height: data.height,
         tokens, templates: data.templates, isLoading: false,
+        // сбрасываем контроль/прицеливание/курсоры с прошлой карты — они
+        // ссылаются на токены/персонажей, которых на новой карте может не быть
+        controlledTokenId: null, controlledCharacterId: null, activeAction: null,
+        remoteTargetPreviews: {}, remotePointers: {},
       });
     } catch (e) {
       set({ error: e.message, isLoading: false });
     }
+  },
+
+  async createMap(roomId, name) {
+    await api.post(`/rooms/${roomId}/battle-maps`, { name });
+    // локальный список maps обновится через сокет-эхо battle_map_created,
+    // не трогаем стейт руками — тот же принцип, что и у остальных сущностей
+  },
+
+  async renameMap(roomId, mapId, name) {
+    await api.put(`/rooms/${roomId}/battle-maps/${mapId}`, { name });
+  },
+
+  async deleteMap(roomId, mapId) {
+    await api.delete(`/rooms/${roomId}/battle-maps/${mapId}`);
+  },
+
+  switchMap(roomId, mapId) {
+    // без оптимистичного обновления — ждём battle_map_switched с сервера,
+    // тот же принцип, что и у mode_change (не менять локальный стейт до
+    // подтверждения)
+    getSocket().emit('battle_map_switch', { room_id: roomId, battle_map_id: mapId });
   },
 
   createTemplate(roomId, { kind, characterId, label, imageUrl }) {
@@ -162,6 +208,35 @@ export const useBattleMapStore = create((set, get) => ({
       ));
     });
 
+    // PUT /characters/<id> (например, правка листа в соседней вкладке)
+    // рассылает это же событие всем комнатам, где персонаж активен — здесь
+    // подхватываем его для токенов отряда на карте. hp_current/hp_max/ac
+    // у не-instance токена и так вычисляются на бэке заново из
+    // character.sheet_data при каждой загрузке карты (см. rooms/routes.py),
+    // то есть это не боевое состояние токена, а просто отражение листа —
+    // синхронизировать его живьём безопасно. instance-токены (клоны/призывы)
+    // намеренно не трогаем: у них своя снятая копия sheet_data.
+    socket.on('character_updated', (data) => {
+      set((state) => {
+        let changed = false;
+        const tokens = { ...state.tokens };
+        Object.keys(tokens).forEach((id) => {
+          const t = tokens[id];
+          if (t.character_id === data.character_id && !t.is_instance) {
+            changed = true;
+            tokens[id] = {
+              ...t,
+              character_name: data.name,
+              hp_current: data.hp_current,
+              hp_max: data.hp_max,
+              ac: data.ac,
+            };
+          }
+        });
+        return changed ? { tokens } : state;
+      });
+    });
+
     socket.on('template_created', (data) => {
       set((state) => (
         state.templates.some((t) => t.id === data.id)
@@ -206,6 +281,35 @@ export const useBattleMapStore = create((set, get) => ({
         delete remotePointers[data.user_id];
         return { remotePointers };
       });
+    });
+
+    socket.on('battle_map_created', (data) => {
+      set((state) => (
+        state.maps.some((m) => m.id === data.id)
+          ? state
+          : { maps: [...state.maps, { id: data.id, name: data.name }] }
+      ));
+    });
+
+    socket.on('battle_map_renamed', (data) => {
+      set((state) => ({
+        maps: state.maps.map((m) => (m.id === data.id ? { ...m, name: data.name } : m)),
+      }));
+    });
+
+    socket.on('battle_map_deleted', (data) => {
+      set((state) => ({ maps: state.maps.filter((m) => m.id !== data.id) }));
+      // если удалённая карта была активной, сервер уже переназначил
+      // активную — подхватываем её, иначе просто чистим список выше
+      if (get().activeMapId === data.id || get().activeMapId !== data.active_battle_map_id) {
+        set({ activeMapId: data.active_battle_map_id });
+        get().loadBattleMap(data.room_id, data.active_battle_map_id);
+      }
+    });
+
+    socket.on('battle_map_switched', (data) => {
+      set({ activeMapId: data.battle_map_id });
+      get().loadBattleMap(data.room_id, data.battle_map_id);
     });
   },
 }));

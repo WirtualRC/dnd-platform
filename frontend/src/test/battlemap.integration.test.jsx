@@ -47,7 +47,7 @@ describe('боевая карта: представления и размеще�
     });
 
     useBattleMapStore.getState().attachSocketListeners();
-    await useBattleMapStore.getState().loadBattleMap(room.id);
+    await useBattleMapStore.getState().loadMaps(room.id);
     const mapId = useBattleMapStore.getState().mapId;
     expect(mapId).toBeTruthy();
 
@@ -117,7 +117,7 @@ describe('боевая карта: представления и размеще�
     await new Promise((r) => setTimeout(r, 200));
 
     useBattleMapStore.getState().attachSocketListeners();
-    await useBattleMapStore.getState().loadBattleMap(room.id);
+    await useBattleMapStore.getState().loadMaps(room.id);
 
     // второй независимый клиент слушает превью
     const player = await createRawSession(`playeraim${uniq}`, 'password123');

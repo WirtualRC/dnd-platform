@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Group, Circle, Image as KonvaImage, Text } from 'react-konva';
+import { Group, Circle, Image as KonvaImage } from 'react-konva';
 
 // react-konva не даёт готового хука загрузки изображений (в отличие от
 // пакета use-image) — пишем свой маленький, чтобы не тащить лишнюю
@@ -40,9 +40,6 @@ export default function TokenNode({ token, canMove, shapeRef, onSelect, onDragMo
         <KonvaImage image={image} x={-w / 2} y={-h / 2} width={w} height={h} />
       ) : (
         <Circle radius={w / 2} fill={color} stroke="#1b1f27" strokeWidth={2} />
-      )}
-      {token.label && (
-        <Text text={token.label} y={h / 2 + 4} width={w} offsetX={w / 2} align="center" fontSize={12} fill="#e7e9ee" />
       )}
     </Group>
   );
