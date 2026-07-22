@@ -82,3 +82,14 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+/* тост с результатом броска: ширина по содержимому, а не фиксированные 440px
+   контейнера — заголовок/сообщение короткие ("d20 (12) +3 = 15"), поэтому
+   растянутый на весь контейнер тост выглядит нелепо пустым */
+.mantine-Notifications-root { width: fit-content; }
+.mantine-Notification-root { width: fit-content; max-width: calc(100vw - var(--mantine-spacing-md) * 4); }
+.mantine-Notification-title, .mantine-Notification-description {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: nowrap;
+}
