@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useRoomStore } from '../../store/useRoomStore';
 import DiceLog from '../Room/DiceLog';
 
 // В общении лог кубиков виден прямо на странице (DiceRoller), но в бою
@@ -10,12 +9,11 @@ import DiceLog from '../Room/DiceLog';
 // поэтому тот же DiceLog переиспользуется здесь в свёрнутой панели.
 export default function CombatDiceLog() {
   const [collapsed, setCollapsed] = useState(false);
-  const diceLog = useRoomStore((s) => s.diceLog);
 
   return (
     <div style={styles.panel}>
       <button className="ghost" style={styles.toggle} onClick={() => setCollapsed((v) => !v)}>
-        Кубики {diceLog.length > 0 && `(${diceLog.length})`} {collapsed ? '▲' : '▼'}
+        Кубики {collapsed ? '▲' : '▼'}
       </button>
       {!collapsed && (
         <div style={styles.body}>
