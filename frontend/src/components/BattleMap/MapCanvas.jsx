@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Stage, Layer, Line, Circle, Text, Transformer, Label, Tag } from 'react-konva';
+import { Stage, Layer, Line, Circle, Rect, Text, Transformer, Label, Tag } from 'react-konva';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
 import { useRoomStore } from '../../store/useRoomStore';
 import { api, API_ORIGIN } from '../../api/client';
@@ -8,14 +8,17 @@ import { throttle } from '../../utils/throttle';
 import { toFeet } from '../../utils/scale';
 import { pushPendingRollLabel } from '../../utils/pendingRollLabels';
 import TokenNode from './TokenNode';
+import FogShapeNode from './FogShapeNode';
 import AoeShape, { RangeRing } from './AoeShape';
 import TokenActionPanel from './TokenActionPanel';
 
-export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDropTemplate }) {
+export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, onDropTemplate }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
   const tokenRefs = useRef({});
+  const fogTransformerRef = useRef(null);
+  const fogShapeRefs = useRef({});
   const lastWorldPos = useRef({ x: 0, y: 0 }); // для вставки картинки — не требует ре-рендера
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [selectedId, setSelectedId] = useState(null);
@@ -27,6 +30,9 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
   const [rulerStart, setRulerStart] = useState(null); // world-точка зажатия в режиме линейки
   const [rulerEnd, setRulerEnd] = useState(null);
   const [pointerTrail, setPointerTrail] = useState([]); // собственный "хвост кометы" в режиме указателя
+  const [fogDrawStart, setFogDrawStart] = useState(null); // world-точка зажатия при рисовании тумана
+  const [fogDrawRect, setFogDrawRect] = useState(null); // { x, y, width, height } — live-превью рисуемой рамки
+  const [selectedFogId, setSelectedFogId] = useState(null);
   const isPointerDown = useRef(false);
   const isMiddlePanning = useRef(false); // панорамирование средней кнопкой — работает в любом режиме
   const lastPanPoint = useRef({ x: 0, y: 0 });
@@ -51,6 +57,12 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
   const remoteTargetPreviews = useBattleMapStore((s) => s.remoteTargetPreviews);
   const activeTool = useBattleMapStore((s) => s.activeTool);
   const remotePointers = useBattleMapStore((s) => s.remotePointers);
+  const fogShapes = useBattleMapStore((s) => s.fogShapes);
+  const fogDrawShapeType = useBattleMapStore((s) => s.fogDrawShapeType);
+  const addFogShape = useBattleMapStore((s) => s.addFogShape);
+  const moveFogShapeLive = useBattleMapStore((s) => s.moveFogShapeLive);
+  const commitFogShapeTransform = useBattleMapStore((s) => s.commitFogShapeTransform);
+  const removeFogShape = useBattleMapStore((s) => s.removeFogShape);
 
   const casterToken = controlledTokenId ? tokens[controlledTokenId] : null;
   const selectedToken = selectedId ? tokens[selectedId] : null;
@@ -97,6 +109,9 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
   useEffect(() => {
     setRulerStart(null);
     setRulerEnd(null);
+    setFogDrawStart(null);
+    setFogDrawRect(null);
+    setSelectedFogId(null);
     if (isPointerDown.current) {
       isPointerDown.current = false;
       setPointerTrail([]);
@@ -126,6 +141,13 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     transformerRef.current.getLayer()?.batchDraw();
   }, [selectedId, tokens]);
 
+  useEffect(() => {
+    if (!fogTransformerRef.current) return;
+    const node = selectedFogId ? fogShapeRefs.current[selectedFogId] : null;
+    fogTransformerRef.current.nodes(node ? [node] : []);
+    fogTransformerRef.current.getLayer()?.batchDraw();
+  }, [selectedFogId, fogShapes]);
+
   // Delete/Backspace — удаление, Escape — отмена прицеливания. Право
   // удалять — то же самое право двигать токен (сервер перепроверит сам).
   useEffect(() => {
@@ -140,6 +162,15 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
       }
       if (isEditingField) return;
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+
+      if (activeTool === 'fog' && selectedFogId) {
+        if (!isGm) return;
+        if (!window.confirm('Удалить фигуру тумана войны?')) return;
+        removeFogShape(roomId, selectedFogId);
+        setSelectedFogId(null);
+        return;
+      }
+
       if (!selectedId) return;
       const token = tokens[selectedId];
       if (!token || !canMoveToken(token)) return;
@@ -149,7 +180,7 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, tokens, canMoveToken, roomId, removeToken, activeAction, clearTargetPreview, setActiveAction]);
+  }, [selectedId, tokens, canMoveToken, roomId, removeToken, activeAction, clearTargetPreview, setActiveAction, activeTool, selectedFogId, isGm, removeFogShape]);
 
   // Вставка картинки по Ctrl+V — в обход системы представлений, это про
   // "быстро добавить картинку", а не "сохранить переиспользуемую заготовку".
@@ -297,6 +328,13 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     } else if (activeTool === 'pointer' && isPointerDown.current) {
       setPointerTrail((trail) => [...trail, world].slice(-6));
       throttledPointerUpdate(world, roomId);
+    } else if (activeTool === 'fog' && fogDrawStart) {
+      setFogDrawRect({
+        x: Math.min(fogDrawStart.x, world.x),
+        y: Math.min(fogDrawStart.y, world.y),
+        width: Math.abs(world.x - fogDrawStart.x),
+        height: Math.abs(world.y - fogDrawStart.y),
+      });
     }
   }
 
@@ -324,6 +362,16 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
       isPointerDown.current = true;
       setPointerTrail([world]);
       throttledPointerUpdate(world, roomId);
+    } else if (activeTool === 'fog' && isGm) {
+      // рисуем новую фигуру только по клику на пустое место стейджа;
+      // клик по существующей фигуре — это её собственный выбор/драг,
+      // не начало новой рамки
+      if (e.target !== stageRef.current) return;
+      const world = getPointerWorld();
+      if (!world) return;
+      setSelectedFogId(null);
+      setFogDrawStart(world);
+      setFogDrawRect({ x: world.x, y: world.y, width: 0, height: 0 });
     }
   }
 
@@ -339,6 +387,16 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
       isPointerDown.current = false;
       setPointerTrail([]);
       useBattleMapStore.getState().clearPointer(roomId);
+    } else if (activeTool === 'fog' && fogDrawStart) {
+      if (fogDrawRect && fogDrawRect.width > 10 && fogDrawRect.height > 10) {
+        addFogShape(roomId, mapId, {
+          shapeType: fogDrawShapeType,
+          x: fogDrawRect.x, y: fogDrawRect.y,
+          width: fogDrawRect.width, height: fogDrawRect.height,
+        });
+      }
+      setFogDrawStart(null);
+      setFogDrawRect(null);
     }
   }
 
@@ -347,7 +405,7 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
   useEffect(() => {
     window.addEventListener('mouseup', handleStageMouseUp);
     return () => window.removeEventListener('mouseup', handleStageMouseUp);
-  }, [activeTool, roomId]);
+  }, [activeTool, roomId, fogDrawStart, fogDrawRect, fogDrawShapeType, mapId]);
 
   function confirmTarget() {
     const action = activeAction;
@@ -543,6 +601,53 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
               />
             ));
           })}
+        </Layer>
+
+        {/* туман войны — самый верхний слой, перекрывает всё, включая
+            токены. listening только пока активен инструмент тумана: в
+            остальных режимах фигуры не должны перехватывать клики по
+            токенам под собой. У игроков editable всегда false. */}
+        <Layer listening={activeTool === 'fog'}>
+          {Object.values(fogShapes).map((shape) => (
+            <FogShapeNode
+              key={shape.id}
+              shape={shape}
+              isGm={isGm}
+              editable={isGm && activeTool === 'fog'}
+              shapeRef={(node) => { if (node) fogShapeRefs.current[shape.id] = node; }}
+              onSelect={() => setSelectedFogId(shape.id)}
+              onDragMove={(id, x, y) => moveFogShapeLive(roomId, id, { pos_x: x, pos_y: y })}
+              onDragEnd={(id, x, y) => commitFogShapeTransform(roomId, id, { pos_x: x, pos_y: y })}
+              onTransformEnd={(id, node) => {
+                const scaleX = node.scaleX();
+                const scaleY = node.scaleY();
+                node.scaleX(1);
+                node.scaleY(1);
+                commitFogShapeTransform(roomId, id, {
+                  pos_x: node.x(),
+                  pos_y: node.y(),
+                  rotation: node.rotation(),
+                  width: Math.max(10, (shape.width || 10) * scaleX),
+                  height: Math.max(10, (shape.height || 10) * scaleY),
+                });
+              }}
+            />
+          ))}
+
+          {isGm && activeTool === 'fog' && fogDrawRect && (
+            <Rect
+              x={fogDrawRect.x} y={fogDrawRect.y} width={fogDrawRect.width} height={fogDrawRect.height}
+              fill="rgba(20,20,25,0.5)" stroke="#f6f7f9" dash={[6, 4]}
+            />
+          )}
+
+          {isGm && activeTool === 'fog' && (
+            <Transformer
+              ref={fogTransformerRef}
+              enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+              boundBoxFunc={(oldBox, newBox) => (Math.abs(newBox.width) < 10 || Math.abs(newBox.height) < 10 ? oldBox : newBox)}
+            />
+          )}
         </Layer>
       </Stage>
 

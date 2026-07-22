@@ -279,6 +279,9 @@ class BattleMap(db.Model):
     tokens = db.relationship(
         "Token", back_populates="battle_map", cascade="all, delete-orphan"
     )
+    fog_shapes = db.relationship(
+        "FogShape", back_populates="battle_map", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<BattleMap room={self.room_id}>"
@@ -370,3 +373,39 @@ class Token(db.Model):
 
     def __repr__(self):
         return f"<Token {self.label or self.character_id} layer={self.layer} @ ({self.pos_x},{self.pos_y})>"
+
+
+class FogShape(db.Model):
+    """Фигура тумана войны на боевой карте — GM закрашивает области,
+    скрытые от игроков ('paint-to-hide': карта по умолчанию открыта,
+    фигуры добавляют СКРЫТЫЕ зоны, в отличие от Owlbear, где по умолчанию
+    скрыто всё, а фигуры открывают).
+
+    circle и triangle хранятся как bounding box (pos_x/pos_y/width/height),
+    без отдельного радиуса или вершин — вписываются в рамку на клиенте,
+    тем же принципом, что превью AoE считает форму из bounding box на лету.
+
+    Геометрия фигуры не секрет (скрыто то, что ПОД ней, а не сама форма),
+    поэтому в отличие от Token.visible_to_players здесь нет флага
+    видимости и разной сериализации для GM/игрока — весь список
+    рассылается всем поровну, а разное отображение (полупрозрачно у GM /
+    сплошной чёрный у игрока) чисто клиентское."""
+
+    __tablename__ = "fog_shapes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    battle_map_id = db.Column(db.Integer, db.ForeignKey("battle_maps.id"), nullable=False)
+    shape_type = db.Column(db.String(10), nullable=False)  # 'rect' | 'circle' | 'triangle'
+
+    pos_x = db.Column(db.Float, nullable=False)  # верхний левый угол bounding box, px
+    pos_y = db.Column(db.Float, nullable=False)
+    width = db.Column(db.Float, nullable=False)
+    height = db.Column(db.Float, nullable=False)
+    rotation = db.Column(db.Float, default=0, nullable=False)
+
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    battle_map = db.relationship("BattleMap", back_populates="fog_shapes")
+
+    def __repr__(self):
+        return f"<FogShape {self.shape_type} @ ({self.pos_x},{self.pos_y})>"

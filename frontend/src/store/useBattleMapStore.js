@@ -11,6 +11,7 @@ export const useBattleMapStore = create((set, get) => ({
   height: 4000,
   tokens: {}, // { [id]: tokenData } — размещённые токены (template=false)
   templates: [], // представления обеих вкладок, kind различает 'pc'/'npc'
+  fogShapes: {}, // { [id]: fogShapeData } — фигуры тумана войны текущей карты
   isLoading: false,
   error: null,
 
@@ -39,6 +40,11 @@ export const useBattleMapStore = create((set, get) => ({
   // указатель, видимый остальным участникам комнаты
   activeTool: 'pan',
   setActiveTool(tool) { set({ activeTool: tool }); },
+
+  // форма, которую рисует GM инструментом тумана войны — переключается в
+  // под-панели, появляющейся при activeTool === 'fog'
+  fogDrawShapeType: 'rect',
+  setFogDrawShapeType(shapeType) { set({ fogDrawShapeType: shapeType }); },
 
   // указатели ДРУГИХ участников — ключ user_id
   remotePointers: {},
@@ -87,9 +93,11 @@ export const useBattleMapStore = create((set, get) => ({
       const data = await api.get(`/rooms/${roomId}/battle-maps/${mapId}`);
       const tokens = {};
       data.objects.forEach((t) => { tokens[t.id] = t; });
+      const fogShapes = {};
+      (data.fog_shapes || []).forEach((f) => { fogShapes[f.id] = f; });
       set({
         mapId: data.id, gridSize: data.grid_size, width: data.width, height: data.height,
-        tokens, templates: data.templates, isLoading: false,
+        tokens, templates: data.templates, fogShapes, isLoading: false,
         // сбрасываем контроль/прицеливание/курсоры с прошлой карты — они
         // ссылаются на токены/персонажей, которых на новой карте может не быть
         controlledTokenId: null, controlledCharacterId: null, activeAction: null,
@@ -163,6 +171,35 @@ export const useBattleMapStore = create((set, get) => ({
     getSocket().emit('token_update_props', { room_id: roomId, token_id: tokenId, layer });
   },
 
+  addFogShape(roomId, mapId, { shapeType, x, y, width, height }) {
+    getSocket().emit('fog_shape_add', {
+      room_id: roomId, battle_map_id: mapId, shape_type: shapeType,
+      pos_x: x, pos_y: y, width, height,
+    });
+  },
+
+  // оптимистично обновляем локально сразу, тем же принципом, что moveTokenLive
+  moveFogShapeLive(roomId, shapeId, patch) {
+    getSocket().emit('fog_shape_transform_live', { room_id: roomId, shape_id: shapeId, ...patch });
+    set((state) => (
+      state.fogShapes[shapeId]
+        ? { fogShapes: { ...state.fogShapes, [shapeId]: { ...state.fogShapes[shapeId], ...patch } } }
+        : state
+    ));
+  },
+
+  commitFogShapeTransform(roomId, shapeId, patch) {
+    getSocket().emit('fog_shape_transform_commit', { room_id: roomId, shape_id: shapeId, ...patch });
+  },
+
+  removeFogShape(roomId, shapeId) {
+    getSocket().emit('fog_shape_remove', { room_id: roomId, shape_id: shapeId });
+  },
+
+  clearAllFog(roomId, mapId) {
+    getSocket().emit('fog_clear_all', { room_id: roomId, battle_map_id: mapId });
+  },
+
   attachSocketListeners() {
     if (listenersAttached) return;
     listenersAttached = true;
@@ -207,6 +244,39 @@ export const useBattleMapStore = create((set, get) => ({
           : state
       ));
     });
+
+    socket.on('fog_shape_added', (data) => {
+      set((state) => ({ fogShapes: { ...state.fogShapes, [data.id]: data } }));
+    });
+
+    socket.on('fog_shape_moved_live', (data) => {
+      set((state) => (
+        state.fogShapes[data.shape_id]
+          ? { fogShapes: { ...state.fogShapes, [data.shape_id]: { ...state.fogShapes[data.shape_id], ...data } } }
+          : state
+      ));
+    });
+
+    // в отличие от fog_shape_moved_live (кастомный пейлоад с shape_id),
+    // сервер шлёт сюда полный _serialize_fog_shape(shape) с полем id —
+    // тем же ключом, что и в fog_shape_added
+    socket.on('fog_shape_moved_committed', (data) => {
+      set((state) => (
+        state.fogShapes[data.id]
+          ? { fogShapes: { ...state.fogShapes, [data.id]: { ...state.fogShapes[data.id], ...data } } }
+          : state
+      ));
+    });
+
+    socket.on('fog_shape_removed', (data) => {
+      set((state) => {
+        const fogShapes = { ...state.fogShapes };
+        delete fogShapes[data.shape_id];
+        return { fogShapes };
+      });
+    });
+
+    socket.on('fog_cleared', () => { set({ fogShapes: {} }); });
 
     // PUT /characters/<id> (например, правка листа в соседней вкладке)
     // рассылает это же событие всем комнатам, где персонаж активен — здесь

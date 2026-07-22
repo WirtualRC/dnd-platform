@@ -53,6 +53,7 @@ export default function BattleMapView({ room }) {
     <div className="theme-slate" style={styles.fullscreen}>
       <MapCanvas
         roomId={room.id}
+        isGm={isGm}
         canMoveToken={canMoveToken}
         canManageToken={canManageToken}
         onDropTemplate={(templateId, x, y) => placeTemplate(room.id, templateId, x, y)}
@@ -62,7 +63,7 @@ export default function BattleMapView({ room }) {
       <MapRoster roomId={room.id} canControl={canMoveToken} />
       <Hotbar roomId={room.id} />
       <CombatDiceLog />
-      <CursorModePanel />
+      <CursorModePanel isGm={isGm} roomId={room.id} />
 
       <div style={styles.topRight}>
         <div style={styles.topRightRow}>

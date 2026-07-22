@@ -38,28 +38,82 @@ const TOOLS = [
       </svg>
     ),
   },
+  {
+    id: 'fog',
+    title: 'Туман войны — виден только GM',
+    gmOnly: true,
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6.5 19a4.5 4.5 0 0 1-.4-8.98A6 6 0 0 1 17.5 8.5 4.5 4.5 0 0 1 17 19H6.5z" />
+      </svg>
+    ),
+  },
 ];
 
-export default function CursorModePanel() {
+const FOG_SHAPES = [
+  { id: 'rect', title: 'Прямоугольник' },
+  { id: 'circle', title: 'Круг' },
+  { id: 'triangle', title: 'Треугольник' },
+];
+
+export default function CursorModePanel({ isGm, roomId }) {
   const activeTool = useBattleMapStore((s) => s.activeTool);
   const setActiveTool = useBattleMapStore((s) => s.setActiveTool);
+  const fogDrawShapeType = useBattleMapStore((s) => s.fogDrawShapeType);
+  const setFogDrawShapeType = useBattleMapStore((s) => s.setFogDrawShapeType);
+  const mapId = useBattleMapStore((s) => s.mapId);
+  const clearAllFog = useBattleMapStore((s) => s.clearAllFog);
+
+  const visibleTools = isGm ? TOOLS : TOOLS.filter((t) => !t.gmOnly);
 
   return (
-    <div style={styles.panel}>
-      {TOOLS.map((tool) => (
-        <button
-          key={tool.id}
-          type="button"
-          className="ghost"
-          title={tool.title}
-          aria-pressed={activeTool === tool.id}
-          onClick={() => setActiveTool(tool.id)}
-          style={{ ...styles.btn, ...(activeTool === tool.id ? styles.btnActive : {}) }}
-        >
-          {tool.icon}
-        </button>
-      ))}
-    </div>
+    <>
+      <div style={styles.panel}>
+        {visibleTools.map((tool) => (
+          <button
+            key={tool.id}
+            type="button"
+            className="ghost"
+            title={tool.title}
+            aria-pressed={activeTool === tool.id}
+            onClick={() => setActiveTool(tool.id)}
+            style={{ ...styles.btn, ...(activeTool === tool.id ? styles.btnActive : {}) }}
+          >
+            {tool.icon}
+          </button>
+        ))}
+      </div>
+
+      {isGm && activeTool === 'fog' && (
+        <div style={styles.fogPanel}>
+          {FOG_SHAPES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className="ghost"
+              title={s.title}
+              aria-pressed={fogDrawShapeType === s.id}
+              onClick={() => setFogDrawShapeType(s.id)}
+              style={{ ...styles.fogBtn, ...(fogDrawShapeType === s.id ? styles.btnActive : {}) }}
+            >
+              {s.title}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="ghost"
+            title="Очистить весь туман войны на этой карте"
+            onClick={() => {
+              if (!window.confirm('Убрать весь туман войны с этой карты?')) return;
+              clearAllFog(roomId, mapId);
+            }}
+            style={styles.fogBtn}
+          >
+            Очистить весь туман
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -75,5 +129,14 @@ const styles = {
   },
   btnActive: {
     background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
+  },
+  fogPanel: {
+    position: 'absolute', right: 56, top: '50%', transform: 'translateY(-50%)',
+    background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 10,
+    padding: 6, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 10, minWidth: 160,
+  },
+  fogBtn: {
+    height: 32, padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+    borderRadius: 8, color: 'var(--text-secondary)', fontSize: 13, whiteSpace: 'nowrap',
   },
 };

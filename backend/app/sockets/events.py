@@ -4,7 +4,7 @@ from flask_login import current_user
 from flask_socketio import emit, join_room as sio_join_room, leave_room as sio_leave_room
 
 from ..extensions import db, socketio
-from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap
+from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap, FogShape
 from ..utils.dice import roll, InvalidDiceFormula
 from ..utils.permissions import is_gm, is_character_owner
 
@@ -701,6 +701,174 @@ def handle_token_remove(data):
     db.session.commit()
 
     emit('token_removed', {'token_id': token_id}, room=str(room_id))
+
+
+def _serialize_fog_shape(shape):
+    return {
+        'id': shape.id,
+        'battle_map_id': shape.battle_map_id,
+        'shape_type': shape.shape_type,
+        'pos_x': shape.pos_x,
+        'pos_y': shape.pos_y,
+        'width': shape.width,
+        'height': shape.height,
+        'rotation': shape.rotation,
+    }
+
+
+@socketio.on('fog_shape_add')
+def handle_fog_shape_add(data):
+    """Создание новой фигуры тумана войны — только GM. Геометрия фигуры не
+    секрет (скрыто то, что под ней, а не сама форма), поэтому рассылается
+    всей комнате как есть, без разной сериализации для GM/игрока — в
+    отличие от Token.visible_to_players разное отображение (полупрозрачно
+    у GM / сплошной чёрный у игрока) чисто клиентское."""
+    room_id = data.get('room_id')
+    battle_map_id = data.get('battle_map_id')
+    shape_type = data.get('shape_type')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        emit('error', {'message': 'Только GM может рисовать туман войны'})
+        return
+    if shape_type not in ('rect', 'circle', 'triangle'):
+        emit('error', {'message': "shape_type должен быть 'rect', 'circle' или 'triangle'"})
+        return
+
+    battle_map = BattleMap.query.get(battle_map_id)
+    if not battle_map or battle_map.room_id != room_id:
+        emit('error', {'message': 'Карта не найдена или не принадлежит этой комнате'})
+        return
+
+    pos_x, pos_y = data.get('pos_x'), data.get('pos_y')
+    width, height = data.get('width'), data.get('height')
+    if not all(isinstance(v, (int, float)) for v in (pos_x, pos_y, width, height)):
+        emit('error', {'message': 'Некорректная геометрия фигуры тумана'})
+        return
+    if width < 10 or height < 10:
+        emit('error', {'message': 'Фигура тумана слишком мала'})
+        return
+
+    shape = FogShape(
+        battle_map_id=battle_map_id,
+        shape_type=shape_type,
+        pos_x=float(pos_x),
+        pos_y=float(pos_y),
+        width=float(width),
+        height=float(height),
+        rotation=data.get('rotation', 0) or 0,
+    )
+    db.session.add(shape)
+    db.session.commit()
+
+    emit('fog_shape_added', _serialize_fog_shape(shape), room=str(room_id))
+
+
+@socketio.on('fog_shape_transform_live')
+def handle_fog_shape_transform_live(data):
+    """Высокочастотное событие во время драга/ресайза фигуры тумана — не
+    пишет в БД, только ретранслирует остальным участникам комнаты. Тот же
+    принцип, что и token_transform_live."""
+    room_id = data.get('room_id')
+    shape_id = data.get('shape_id')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        return
+
+    shape = FogShape.query.get(shape_id)
+    if not shape or shape.battle_map.room_id != room_id:
+        return
+
+    # шлём только реально переданные поля — сейчас live-событие всегда
+    # только про перетаскивание (pos_x/pos_y), без ресайза, но включать
+    # width/height/rotation как None "на всякий случай" затирало бы их на
+    # клиенте null'ом при мёрдже в стор и схлопывало фигуру в нулевой размер
+    payload = {'shape_id': shape_id}
+    for field_name in ('pos_x', 'pos_y', 'width', 'height', 'rotation'):
+        if field_name in data:
+            payload[field_name] = data[field_name]
+
+    emit('fog_shape_moved_live', payload, room=str(room_id), include_self=False)
+
+
+@socketio.on('fog_shape_transform_commit')
+def handle_fog_shape_transform_commit(data):
+    """Одна запись в БД на весь драг/ресайз фигуры тумана — вызывается на
+    отпускание, зеркалит token_transform_commit."""
+    room_id = data.get('room_id')
+    shape_id = data.get('shape_id')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        emit('error', {'message': 'Только GM может редактировать туман войны'})
+        return
+
+    shape = FogShape.query.get(shape_id)
+    if not shape or shape.battle_map.room_id != room_id:
+        emit('error', {'message': 'Фигура тумана не найдена в этой комнате'})
+        return
+
+    pos_x, pos_y = data.get('pos_x'), data.get('pos_y')
+    width, height = data.get('width'), data.get('height')
+    rotation = data.get('rotation')
+    if not all(isinstance(v, (int, float)) for v in (pos_x, pos_y, width, height)):
+        emit('error', {'message': 'Некорректная геометрия фигуры тумана'})
+        return
+    if width < 10 or height < 10:
+        emit('error', {'message': 'Фигура тумана слишком мала'})
+        return
+
+    shape.pos_x, shape.pos_y = float(pos_x), float(pos_y)
+    shape.width, shape.height = float(width), float(height)
+    if rotation is not None:
+        if not isinstance(rotation, (int, float)):
+            emit('error', {'message': 'Некорректный угол поворота'})
+            return
+        shape.rotation = float(rotation) % 360
+
+    db.session.commit()
+
+    emit('fog_shape_moved_committed', _serialize_fog_shape(shape), room=str(room_id))
+
+
+@socketio.on('fog_shape_remove')
+def handle_fog_shape_remove(data):
+    """Удаление одной фигуры тумана — только GM."""
+    room_id = data.get('room_id')
+    shape_id = data.get('shape_id')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        emit('error', {'message': 'Только GM может удалять туман войны'})
+        return
+
+    shape = FogShape.query.get(shape_id)
+    if not shape or shape.battle_map.room_id != room_id:
+        emit('error', {'message': 'Фигура тумана не найдена в этой комнате'})
+        return
+
+    db.session.delete(shape)
+    db.session.commit()
+
+    emit('fog_shape_removed', {'shape_id': shape_id}, room=str(room_id))
+
+
+@socketio.on('fog_clear_all')
+def handle_fog_clear_all(data):
+    """Полная очистка тумана войны для карты одной кнопкой — только GM."""
+    room_id = data.get('room_id')
+    battle_map_id = data.get('battle_map_id')
+
+    if not room_id or not is_gm(room_id, current_user.id):
+        emit('error', {'message': 'Только GM может очищать туман войны'})
+        return
+
+    battle_map = BattleMap.query.get(battle_map_id)
+    if not battle_map or battle_map.room_id != room_id:
+        emit('error', {'message': 'Карта не найдена или не принадлежит этой комнате'})
+        return
+
+    FogShape.query.filter_by(battle_map_id=battle_map_id).delete()
+    db.session.commit()
+
+    emit('fog_cleared', {'battle_map_id': battle_map_id}, room=str(room_id))
 
 
 @socketio.on('spell_cast')

@@ -383,6 +383,19 @@ def get_battle_map(room_id, map_id):
             "ac": vitality.get("ac"),
         })
 
+    # геометрия тумана войны не секрет (скрыто то, что под ней, а не сама
+    # форма) — рассылается всем поровну, без GM/player-фильтрации, в
+    # отличие от objects выше
+    fog_shapes = [{
+        "id": shape.id,
+        "shape_type": shape.shape_type,
+        "pos_x": shape.pos_x,
+        "pos_y": shape.pos_y,
+        "width": shape.width,
+        "height": shape.height,
+        "rotation": shape.rotation,
+    } for shape in battle_map.fog_shapes]
+
     return jsonify({
         "id": battle_map.id,
         "name": battle_map.name,
@@ -391,6 +404,7 @@ def get_battle_map(room_id, map_id):
         "height": battle_map.height,
         "objects": objects,
         "templates": templates,
+        "fog_shapes": fog_shapes,
     }), 200
 
 
