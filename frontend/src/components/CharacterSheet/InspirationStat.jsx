@@ -4,7 +4,7 @@ export default function InspirationStat({ value, onChange }) {
   const count = value || 0;
 
   function handleClick() {
-    onChange((count + 1) % 4); // 0 -> 1 -> 2 -> 3 -> 0
+    onChange((count + 1) % 2); // 0 -> 1 -> 2 -> 3 -> 0
   }
 
   return (

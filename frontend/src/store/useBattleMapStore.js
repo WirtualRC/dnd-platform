@@ -109,6 +109,14 @@ export const useBattleMapStore = create((set, get) => ({
     getSocket().emit('token_remove', { room_id: roomId, token_id: tokenId });
   },
 
+  setTokenLocked(roomId, tokenId, locked) {
+    getSocket().emit('token_update_props', { room_id: roomId, token_id: tokenId, locked });
+  },
+
+  setTokenLayer(roomId, tokenId, layer) {
+    getSocket().emit('token_update_props', { room_id: roomId, token_id: tokenId, layer });
+  },
+
   attachSocketListeners() {
     if (listenersAttached) return;
     listenersAttached = true;
@@ -139,6 +147,14 @@ export const useBattleMapStore = create((set, get) => ({
     });
 
     socket.on('token_moved_committed', (data) => {
+      set((state) => (
+        state.tokens[data.token_id]
+          ? { tokens: { ...state.tokens, [data.token_id]: { ...state.tokens[data.token_id], ...data } } }
+          : state
+      ));
+    });
+
+    socket.on('token_props_updated', (data) => {
       set((state) => (
         state.tokens[data.token_id]
           ? { tokens: { ...state.tokens, [data.token_id]: { ...state.tokens[data.token_id], ...data } } }

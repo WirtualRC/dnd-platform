@@ -9,8 +9,9 @@ import { toFeet } from '../../utils/scale';
 import { pushPendingRollLabel } from '../../utils/pendingRollLabels';
 import TokenNode from './TokenNode';
 import AoeShape, { RangeRing } from './AoeShape';
+import TokenActionPanel from './TokenActionPanel';
 
-export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
+export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDropTemplate }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
   const transformerRef = useRef(null);
@@ -18,6 +19,10 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const lastWorldPos = useRef({ x: 0, y: 0 }); // для вставки картинки — не требует ре-рендера
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [selectedId, setSelectedId] = useState(null);
+  // экранная проекция трансформации стейджа (пан/зум) — нужна только чтобы
+  // держать плавающую HTML-панель действий токена на месте поверх канваса;
+  // сам канвас читает x/y/scale стейджа напрямую и в этом стейте не нуждается
+  const [stageTransform, setStageTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [cursorWorld, setCursorWorld] = useState(null); // для отрисовки собственного превью прицеливания
   const [rulerStart, setRulerStart] = useState(null); // world-точка зажатия в режиме линейки
   const [rulerEnd, setRulerEnd] = useState(null);
@@ -25,6 +30,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const isPointerDown = useRef(false);
   const isMiddlePanning = useRef(false); // панорамирование средней кнопкой — работает в любом режиме
   const lastPanPoint = useRef({ x: 0, y: 0 });
+  const hasCenteredRef = useRef(false); // чтобы не сбрасывать панораму игрока при каждом ресайзе
   const remotePointerTrails = useRef({}); // { [userId]: [{x,y}, ...] } — буфер хвостов чужих указателей
   const [, setRemoteTrailTick] = useState(0); // форс ре-рендер при обновлении буфера выше (он вне React state)
 
@@ -36,6 +42,8 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const moveTokenLive = useBattleMapStore((s) => s.moveTokenLive);
   const commitTokenTransform = useBattleMapStore((s) => s.commitTokenTransform);
   const removeToken = useBattleMapStore((s) => s.removeToken);
+  const setTokenLocked = useBattleMapStore((s) => s.setTokenLocked);
+  const setTokenLayer = useBattleMapStore((s) => s.setTokenLayer);
   const controlledTokenId = useBattleMapStore((s) => s.controlledTokenId);
   const activeAction = useBattleMapStore((s) => s.activeAction);
   const setActiveAction = useBattleMapStore((s) => s.setActiveAction);
@@ -45,6 +53,12 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
   const remotePointers = useBattleMapStore((s) => s.remotePointers);
 
   const casterToken = controlledTokenId ? tokens[controlledTokenId] : null;
+  const selectedToken = selectedId ? tokens[selectedId] : null;
+  // панель действий видна, только если это свой токен или GM (см.
+  // canManageToken в BattleMapView) — та же проверка, что и на бэкенде у
+  // token_update_props, тут лишь чтобы не рисовать кнопки, которые сервер
+  // всё равно отклонит
+  const showTokenPanel = !!(selectedToken && canManageToken && canManageToken(selectedToken));
 
   // вьюпорт подстраивается под контейнер — карта на весь экран
   useEffect(() => {
@@ -57,6 +71,26 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // при заходе на карту камера по умолчанию должна смотреть в центр сетки,
+  // а не в её левый верхний угол (нулевая позиция Stage); центрируем один
+  // раз, пока не подвинута игроком, и заново — при смене карты
+  useEffect(() => {
+    hasCenteredRef.current = false;
+  }, [mapId]);
+
+  useEffect(() => {
+    if (hasCenteredRef.current) return;
+    const stage = stageRef.current;
+    if (!stage || !mapWidth || !mapHeight || !viewport.width || !viewport.height) return;
+    stage.position({
+      x: (viewport.width - mapWidth * stage.scaleX()) / 2,
+      y: (viewport.height - mapHeight * stage.scaleY()) / 2,
+    });
+    stage.batchDraw();
+    hasCenteredRef.current = true;
+    syncStageTransform();
+  }, [viewport, mapWidth, mapHeight, mapId]);
 
   // при смене инструмента — сбросить незавершённую линейку/указатель; если
   // указатель транслировался, сообщить остальным, что он убран
@@ -148,6 +182,16 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
     return () => document.removeEventListener('paste', handlePaste);
   }, [roomId, mapId]);
 
+  // синхронизирует стейт с фактической трансформацией стейджа — та обычно
+  // двигается императивно (Konva drag, wheel-зум) в обход React ради 60fps,
+  // так что панели, привязанной к экранным координатам токена, неоткуда
+  // больше узнать о пане/зуме
+  function syncStageTransform() {
+    const stage = stageRef.current;
+    if (!stage) return;
+    setStageTransform({ x: stage.x(), y: stage.y(), scale: stage.scaleX() });
+  }
+
   // стейдж может быть подвинут (панорамирование) и масштабирован (зум) —
   // getPointerPosition() отдаёт сырые координаты без поправки на это
   function toWorld(clientX, clientY) {
@@ -175,6 +219,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
     stage.scale({ x: newScale, y: newScale });
     stage.position({ x: pointer.x - mousePointTo.x * newScale, y: pointer.y - mousePointTo.y * newScale });
     stage.batchDraw();
+    syncStageTransform();
   }
 
   // троттлинг создан один раз (useRef) — актуальные activeAction/roomId
@@ -213,6 +258,7 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
       const stage = stageRef.current;
       stage.position({ x: stage.x() + dx, y: stage.y() + dy });
       stage.batchDraw();
+      syncStageTransform();
       return;
     }
 
@@ -323,16 +369,52 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
 
   const gridLines = [];
   for (let x = 0; x <= mapWidth; x += gridSize) {
-    gridLines.push(<Line key={`v${x}`} points={[x, 0, x, mapHeight]} stroke="#3a4150" strokeWidth={1} />);
+    gridLines.push(<Line key={`v${x}`} points={[x, 0, x, mapHeight]} stroke="#72747d" strokeWidth={1} />);
   }
   for (let y = 0; y <= mapHeight; y += gridSize) {
-    gridLines.push(<Line key={`h${y}`} points={[0, y, mapWidth, y]} stroke="#3a4150" strokeWidth={1} />);
+    gridLines.push(<Line key={`h${y}`} points={[0, y, mapWidth, y]} stroke="#72747d" strokeWidth={1} />);
+  }
+
+  // сетка рисуется отдельным слоем МЕЖДУ токенами фона (карта/декорация,
+  // layer < 10) и обычными токенами/эффектами (layer >= 10) — иначе сетка
+  // как один Konva.Layer всегда оказывалась бы либо целиком под, либо
+  // целиком над токенами независимо от их layer, и токен со слоем "Карта"
+  // всё равно рисовался бы поверх линий
+  const sortedTokens = Object.values(tokens).sort((a, b) => (a.layer ?? 10) - (b.layer ?? 10));
+  const backgroundTokens = sortedTokens.filter((t) => (t.layer ?? 10) < 10);
+  const foregroundTokens = sortedTokens.filter((t) => (t.layer ?? 10) >= 10);
+
+  function renderTokenNode(token) {
+    return (
+      <TokenNode
+        key={token.id}
+        token={token}
+        shapeRef={(node) => { if (node) tokenRefs.current[token.id] = node; }}
+        canMove={canMoveToken(token) && !activeAction && activeTool === 'pan'}
+        onSelect={() => handleTokenClick(token)}
+        onDragMove={(id, x, y) => moveTokenLive(roomId, id, x, y)}
+        onDragEnd={(id, x, y) => commitTokenTransform(roomId, id, { pos_x: x, pos_y: y })}
+        onTransformEnd={(id, node) => {
+          const scaleX = node.scaleX();
+          const scaleY = node.scaleY();
+          node.scaleX(1);
+          node.scaleY(1);
+          commitTokenTransform(roomId, id, {
+            pos_x: node.x(),
+            pos_y: node.y(),
+            rotation: node.rotation(),
+            width: Math.max(10, (token.width || 50) * scaleX),
+            height: Math.max(10, (token.height || 50) * scaleY),
+          });
+        }}
+      />
+    );
   }
 
   return (
     <div
       ref={containerRef}
-      style={{ width: '100%', height: '100%', cursor: (activeAction || activeTool !== 'pan') ? 'crosshair' : 'default' }}
+      style={{ width: '100%', height: '100%', position: 'relative', cursor: (activeAction || activeTool !== 'pan') ? 'crosshair' : 'default' }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
     >
@@ -346,33 +428,13 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
         onMouseMove={handleMouseMove}
         onMouseDown={handleStageMouseDown}
         onMouseUp={handleStageMouseUp}
+        onDragMove={syncStageTransform}
+        onDragEnd={syncStageTransform}
       >
+        <Layer>{backgroundTokens.map(renderTokenNode)}</Layer>
         <Layer>{gridLines}</Layer>
         <Layer>
-          {Object.values(tokens).map((token) => (
-            <TokenNode
-              key={token.id}
-              token={token}
-              shapeRef={(node) => { if (node) tokenRefs.current[token.id] = node; }}
-              canMove={canMoveToken(token) && !activeAction && activeTool === 'pan'}
-              onSelect={() => handleTokenClick(token)}
-              onDragMove={(id, x, y) => moveTokenLive(roomId, id, x, y)}
-              onDragEnd={(id, x, y) => commitTokenTransform(roomId, id, { pos_x: x, pos_y: y })}
-              onTransformEnd={(id, node) => {
-                const scaleX = node.scaleX();
-                const scaleY = node.scaleY();
-                node.scaleX(1);
-                node.scaleY(1);
-                commitTokenTransform(roomId, id, {
-                  pos_x: node.x(),
-                  pos_y: node.y(),
-                  rotation: node.rotation(),
-                  width: Math.max(10, (token.width || 50) * scaleX),
-                  height: Math.max(10, (token.height || 50) * scaleY),
-                });
-              }}
-            />
-          ))}
+          {foregroundTokens.map(renderTokenNode)}
           <Transformer
             ref={transformerRef}
             enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
@@ -453,6 +515,23 @@ export default function MapCanvas({ roomId, canMoveToken, onDropTemplate }) {
           })}
         </Layer>
       </Stage>
+
+      {showTokenPanel && (
+        <TokenActionPanel
+          x={stageTransform.x + selectedToken.pos_x * stageTransform.scale}
+          y={stageTransform.y + (selectedToken.pos_y + (selectedToken.height || 50) / 2) * stageTransform.scale}
+          locked={!!selectedToken.locked}
+          layer={selectedToken.layer ?? 10}
+          canDelete={canMoveToken(selectedToken)}
+          onToggleLock={() => setTokenLocked(roomId, selectedToken.id, !selectedToken.locked)}
+          onSetLayer={(layer) => setTokenLayer(roomId, selectedToken.id, layer)}
+          onDelete={() => {
+            if (!window.confirm('Удалить токен с карты?')) return;
+            removeToken(roomId, selectedToken.id);
+            setSelectedId(null);
+          }}
+        />
+      )}
     </div>
   );
 }

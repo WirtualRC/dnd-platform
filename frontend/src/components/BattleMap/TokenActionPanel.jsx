@@ -1,0 +1,134 @@
+import { useEffect, useRef, useState } from 'react';
+import { TOKEN_LAYERS } from './tokenLayers';
+
+const LockIcon = ({ locked }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+    {locked ? (
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    ) : (
+      <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+    )}
+  </svg>
+);
+
+const LayersIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+    <polyline points="2 17 12 22 22 17" />
+    <polyline points="2 12 12 17 22 12" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </svg>
+);
+
+// Плавающая панель действий под выбранным токеном — позиция задаётся в
+// экранных координатах (x,y = нижняя точка токена), пересчитывается
+// снаружи при каждом пане/зуме карты
+export default function TokenActionPanel({ x, y, locked, layer, canDelete, onToggleLock, onSetLayer, onDelete }) {
+  const [layerMenuOpen, setLayerMenuOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!layerMenuOpen) return undefined;
+    function handleOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setLayerMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [layerMenuOpen]);
+
+  // закрытая панель слоёв не должна тихо переживать переключение на
+  // другой токен под тем же экранным местом
+  useEffect(() => { setLayerMenuOpen(false); }, [x, y]);
+
+  return (
+    <div ref={containerRef} style={{ ...styles.wrap, left: x, top: y }}>
+      <div style={styles.panel}>
+        <button
+          type="button"
+          className="ghost"
+          style={styles.btn}
+          title={locked ? 'Открепить токен' : 'Закрепить токен (запретить двигать мышкой)'}
+          onClick={onToggleLock}
+        >
+          <LockIcon locked={locked} />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          style={{ ...styles.btn, ...(layerMenuOpen ? styles.btnActive : {}) }}
+          title="Слой токена"
+          onClick={() => setLayerMenuOpen((v) => !v)}
+        >
+          <LayersIcon />
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          style={{ ...styles.btn, ...(canDelete ? {} : styles.btnDisabled) }}
+          title={canDelete ? 'Удалить токен' : 'Токен закреплён — сначала открепите его'}
+          disabled={!canDelete}
+          onClick={onDelete}
+        >
+          <TrashIcon />
+        </button>
+      </div>
+
+      {layerMenuOpen && (
+        <div style={styles.layerMenu}>
+          {TOKEN_LAYERS.map((l) => (
+            <button
+              key={l.value}
+              type="button"
+              className="ghost"
+              style={{ ...styles.layerItem, ...(l.value === layer ? styles.layerItemActive : {}) }}
+              onClick={() => { onSetLayer(l.value); setLayerMenuOpen(false); }}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const styles = {
+  wrap: { position: 'absolute', transform: 'translate(-50%, 10px)', zIndex: 15 },
+  panel: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 10,
+    padding: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.35)', whiteSpace: 'nowrap',
+  },
+  btn: {
+    width: 30, height: 30, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 7, color: 'var(--text-secondary)',
+  },
+  btnActive: {
+    background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
+  },
+  btnDisabled: {
+    opacity: 0.35, cursor: 'not-allowed',
+  },
+  layerMenu: {
+    position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: 8,
+    display: 'flex', flexDirection: 'column', gap: 2, minWidth: 140,
+    background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 10,
+    padding: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+  },
+  layerItem: {
+    textAlign: 'left', padding: '6px 8px', borderRadius: 6, fontSize: 13, color: 'var(--text-secondary)',
+  },
+  layerItemActive: {
+    background: 'var(--surface-2)', color: 'var(--text)',
+  },
+};

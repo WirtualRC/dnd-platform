@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useCharacterStore } from '../../store/useCharacterStore';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
+import { api, API_ORIGIN } from '../../api/client';
 
 export default function TemplateModal({ opened, onClose, roomId, kind }) {
   const { characters, loadCharacters } = useCharacterStore();
@@ -8,9 +9,27 @@ export default function TemplateModal({ opened, onClose, roomId, kind }) {
 
   const [label, setLabel] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
   const [linkCharacter, setLinkCharacter] = useState(kind === 'pc');
   const [characterId, setCharacterId] = useState('');
   const panelRef = useRef(null);
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const { url } = await api.postForm(`/rooms/${roomId}/images`, formData);
+      setImageUrl(`${API_ORIGIN}${url}`);
+    } catch (err) {
+      console.error('Не удалось загрузить картинку', err);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   useEffect(() => { if (opened && characters.length === 0) loadCharacters(); }, [opened]);
   useEffect(() => {
@@ -68,10 +87,10 @@ export default function TemplateModal({ opened, onClose, roomId, kind }) {
         <input placeholder="название" value={label} onChange={(e) => setLabel(e.target.value)} style={styles.field} />
       )}
 
-      <input
-        placeholder="URL картинки (необязательно)" value={imageUrl}
-        onChange={(e) => setImageUrl(e.target.value)} style={{ ...styles.field, marginBottom: 14 }}
-      />
+      <label className="secondary" style={{ ...styles.field, marginBottom: 14, display: 'block', textAlign: 'center', cursor: 'pointer' }}>
+        {uploading ? 'Загрузка…' : imageUrl ? 'Картинка загружена ✓' : 'Загрузить картинку'}
+        <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={handleFile} style={{ display: 'none' }} />
+      </label>
 
       <div className="row" style={{ justifyContent: 'flex-end', margin: 0 }}>
         <button type="button" className="secondary" onClick={onClose}>Отмена</button>

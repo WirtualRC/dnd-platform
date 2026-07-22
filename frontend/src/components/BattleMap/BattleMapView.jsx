@@ -32,8 +32,18 @@ export default function BattleMapView({ room }) {
   // каждое перемещение самостоятельно, тут только чтобы не показывать
   // ручки трансформации там, где их всё равно отклонят
   function canMoveToken(token) {
-    if (isGm) return true;
     if (token.locked) return false;
+    if (isGm) return true;
+    if (token.character_id) return myCharacterIds.has(token.character_id);
+    return token.created_by_user_id === user?.id;
+  }
+
+  // право менять метаданные токена (закреп/слой/удаление) — в отличие от
+  // canMoveToken, не зависит от текущего locked (см. _can_manage_token на
+  // бэкенде): иначе владелец, закрепивший свой токен, не смог бы сам его
+  // открепить обратно
+  function canManageToken(token) {
+    if (isGm) return true;
     if (token.character_id) return myCharacterIds.has(token.character_id);
     return token.created_by_user_id === user?.id;
   }
@@ -43,6 +53,7 @@ export default function BattleMapView({ room }) {
       <MapCanvas
         roomId={room.id}
         canMoveToken={canMoveToken}
+        canManageToken={canManageToken}
         onDropTemplate={(templateId, x, y) => placeTemplate(room.id, templateId, x, y)}
       />
 

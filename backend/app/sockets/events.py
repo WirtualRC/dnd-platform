@@ -476,16 +476,79 @@ def handle_update_state(data):
 def _can_move_token(token, room_id: int, user_id: int) -> bool:
     """Кто имеет право двигать конкретный токен.
 
-    locked=True — трогать может только GM. С character_id — GM или
-    владелец персонажа. Без character_id (пропсы, картинки из Ctrl+V) —
-    GM или тот, кто конкретно ЭТОТ токен создал (created_by_user_id)."""
+    locked=True — не двигает никто, вообще никто, включая GM: закреп это
+    явная защита от случайного сдвига мышкой, а не право доступа, так что
+    у него нет обхода через роль. Чтобы подвинуть закреплённый токен,
+    сначала снимают закреп (см. token_update_props / _can_manage_token —
+    то право НЕ проверяет locked, им открепить может GM или владелец).
+    Дальше, без учёта locked: с character_id — GM или владелец персонажа.
+    Без character_id (пропсы, картинки из Ctrl+V) — GM или тот, кто
+    конкретно ЭТОТ токен создал (created_by_user_id)."""
     if token.locked:
-        return is_gm(room_id, user_id)
+        return False
     if is_gm(room_id, user_id):
         return True
     if token.character_id is not None:
         return is_character_owner(token.character_id, user_id)
     return token.created_by_user_id == user_id
+
+
+def _can_manage_token(token, room_id: int, user_id: int) -> bool:
+    """Кто может менять метаданные токена (закреп, слой) — в отличие от
+    _can_move_token, здесь текущее значение locked не в счёт: иначе игрок,
+    закрепивший свой же токен, тут же терял бы право сам его открепить, и
+    открепить смог бы только GM. Права те же, что и на создание токена:
+    GM, владелец персонажа или создатель безличного пропса."""
+    if is_gm(room_id, user_id):
+        return True
+    if token.character_id is not None:
+        return is_character_owner(token.character_id, user_id)
+    return token.created_by_user_id == user_id
+
+
+@socketio.on('token_update_props')
+def handle_token_update_props(data):
+    """Закреп (locked) и слой (layer) токена — отдельно от
+    token_transform_commit, т.к. право их менять не зависит от текущего
+    locked (см. _can_manage_token)."""
+    room_id = data.get('room_id')
+    token_id = data.get('token_id')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    token = Token.query.get(token_id)
+    if not token or token.battle_map.room_id != room_id:
+        emit('error', {'message': 'Токен не найден в этой комнате'})
+        return
+
+    if not _can_manage_token(token, room_id, current_user.id):
+        emit('error', {'message': 'Недостаточно прав изменить этот токен'})
+        return
+
+    patch = {}
+    if 'locked' in data:
+        locked = data.get('locked')
+        if not isinstance(locked, bool):
+            emit('error', {'message': 'Некорректное значение закрепа'})
+            return
+        token.locked = locked
+        patch['locked'] = locked
+    if 'layer' in data:
+        layer = data.get('layer')
+        if not isinstance(layer, int) or isinstance(layer, bool):
+            emit('error', {'message': 'Некорректный слой'})
+            return
+        token.layer = layer
+        patch['layer'] = layer
+
+    if not patch:
+        return
+
+    db.session.commit()
+
+    emit('token_props_updated', {'token_id': token.id, **patch}, room=str(room_id))
 
 
 @socketio.on('token_transform_live')
