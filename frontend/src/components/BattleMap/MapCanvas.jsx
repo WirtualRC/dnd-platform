@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Stage, Layer, Line, Circle, Text, Transformer } from 'react-konva';
+import { Stage, Layer, Line, Circle, Text, Transformer, Label, Tag } from 'react-konva';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
 import { useRoomStore } from '../../store/useRoomStore';
 import { api, API_ORIGIN } from '../../api/client';
@@ -225,8 +225,11 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
   // троттлинг создан один раз (useRef) — актуальные activeAction/roomId
   // читает из стора в момент вызова, а не по замыканию на момент
   // создания, поэтому не протухает при смене активного действия
-  const throttledCursorUpdate = useRef(throttle((worldPos, currentRoomId) => {
-    setCursorWorld(worldPos);
+  //
+  // троттлится только сетевая рассылка остальным участникам; собственное
+  // превью (setCursorWorld) обновляется нетроттлированно в handleMouseMove,
+  // тем же принципом, что и собственный "хвост" указателя ниже
+  const throttledTargetPreviewUpdate = useRef(throttle((worldPos, currentRoomId) => {
     const action = useBattleMapStore.getState().activeAction;
     if (action) {
       useBattleMapStore.getState().broadcastTargetPreview(
@@ -250,6 +253,15 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     return { x: (pointer.x - stage.x()) / scale, y: (pointer.y - stage.y()) / scale };
   }
 
+  // привязка точки к центру клетки сетки — используется для старта линейки
+  function snapToCellCenter(point, cellSize) {
+    if (!cellSize) return point;
+    return {
+      x: Math.floor(point.x / cellSize) * cellSize + cellSize / 2,
+      y: Math.floor(point.y / cellSize) * cellSize + cellSize / 2,
+    };
+  }
+
   function handleMouseMove(e) {
     if (isMiddlePanning.current) {
       const dx = e.evt.clientX - lastPanPoint.current.x;
@@ -265,10 +277,23 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     const world = getPointerWorld();
     if (!world) return;
     lastWorldPos.current = world;
-    throttledCursorUpdate(world, roomId);
+    setCursorWorld(world);
+    throttledTargetPreviewUpdate(world, roomId);
 
     if (activeTool === 'ruler' && rulerStart) {
-      setRulerEnd(world);
+      const dx = world.x - rulerStart.x;
+      const dy = world.y - rulerStart.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      // шаг линейки — целое число клеток (5 фт за клетку), а не плавная длина
+      const steppedDist = gridSize ? Math.round(dist / gridSize) * gridSize : dist;
+      if (dist === 0 || steppedDist === 0) {
+        setRulerEnd(rulerStart);
+      } else {
+        setRulerEnd({
+          x: rulerStart.x + (dx / dist) * steppedDist,
+          y: rulerStart.y + (dy / dist) * steppedDist,
+        });
+      }
     } else if (activeTool === 'pointer' && isPointerDown.current) {
       setPointerTrail((trail) => [...trail, world].slice(-6));
       throttledPointerUpdate(world, roomId);
@@ -290,8 +315,9 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
     if (activeTool === 'ruler') {
       const world = getPointerWorld();
       if (!world) return;
-      setRulerStart(world);
-      setRulerEnd(world);
+      const start = snapToCellCenter(world, gridSize);
+      setRulerStart(start);
+      setRulerEnd(start);
     } else if (activeTool === 'pointer') {
       const world = getPointerWorld();
       if (!world) return;
@@ -478,15 +504,19 @@ export default function MapCanvas({ roomId, canMoveToken, canManageToken, onDrop
           {activeTool === 'ruler' && rulerStart && rulerEnd && (() => {
             const dx = rulerEnd.x - rulerStart.x;
             const dy = rulerEnd.y - rulerStart.y;
-            const feet = Math.round(toFeet(Math.sqrt(dx * dx + dy * dy), gridSize));
+            const rawFeet = toFeet(Math.sqrt(dx * dx + dy * dy), gridSize);
+            const feet = Math.round(rawFeet / 5) * 5;
             return (
               <>
-                <Line points={[rulerStart.x, rulerStart.y, rulerEnd.x, rulerEnd.y]} stroke="#e0c674" strokeWidth={2} dash={[6, 4]} />
-                <Circle x={rulerStart.x} y={rulerStart.y} radius={4} fill="#e0c674" />
-                <Text
-                  x={(rulerStart.x + rulerEnd.x) / 2 + 8} y={(rulerStart.y + rulerEnd.y) / 2 - 8}
-                  text={`${feet} фт`} fontSize={14} fill="#e0c674"
-                />
+                <Line points={[rulerStart.x, rulerStart.y, rulerEnd.x, rulerEnd.y]} stroke="#f6f7f9" strokeWidth={4} dash={[6, 4]} />
+                <Circle x={rulerStart.x} y={rulerStart.y} radius={4} fill="#2f6fed" />
+                <Label x={(rulerStart.x + rulerEnd.x) / 2 + 8} y={(rulerStart.y + rulerEnd.y) / 2 - 8}>
+                  <Tag fill="#1a1a1f" opacity={0.75} cornerRadius={4} />
+                  <Text
+                    text={`${feet} фт`} fontSize={16} fontStyle="bold" fill="#f6f8fa"
+                    padding={4}
+                  />
+                </Label>
               </>
             );
           })()}
