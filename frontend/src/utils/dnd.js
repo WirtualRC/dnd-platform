@@ -179,3 +179,17 @@ export function castingTimeLabel(entry) {
 export function spellTierLabel(tier) {
   return tier === 0 ? 'Заговор' : `Уровень ${tier}`;
 }
+
+const AOE_SHAPE_LABELS = { circle: 'Круг', square: 'Квадрат', rect: 'Прямоугольник', cone: 'Конус' };
+
+// Короткая подпись области поражения для тултипов/подсказок — не хранится,
+// собирается на лету из тех же полей, что редактирует AoeField.
+export function aoeLabel(aoe) {
+  if (!aoe?.shape) return null;
+  const shape = AOE_SHAPE_LABELS[aoe.shape] || aoe.shape;
+  if (aoe.shape === 'circle') return `${shape}, радиус ${aoe.radius ?? 0} фт`;
+  if (aoe.shape === 'square') return `${shape}, сторона ${aoe.size ?? 0} фт`;
+  if (aoe.shape === 'rect') return `${shape} ${aoe.length ?? 0}×${aoe.width ?? 0} фт`;
+  if (aoe.shape === 'cone') return `${shape}, длина ${aoe.length ?? 0} фт`;
+  return shape;
+}

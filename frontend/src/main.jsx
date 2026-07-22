@@ -12,7 +12,7 @@ import './styles/global.css';
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="dark">
-      <Notifications position="bottom-right" />
+      <Notifications position="bottom-left" />
       <App />
     </MantineProvider>
   </StrictMode>,

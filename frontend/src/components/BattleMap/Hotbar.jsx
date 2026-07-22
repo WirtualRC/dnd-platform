@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/client';
 import { useBattleMapStore } from '../../store/useBattleMapStore';
-import { weaponDamageFormula } from '../../utils/dnd';
+import {
+  weaponDamageFormula, weaponAttackTotal, spellSaveDC, spellAttackTotal,
+  castingTimeLabel, spellTierLabel, aoeLabel, formatMod, ABILITY_LABELS,
+} from '../../utils/dnd';
 import HotbarIcon from './HotbarIcon';
 
 // Формула для броска после подтверждения цели — только у атак и заклинаний/
@@ -12,6 +15,56 @@ function actionRollFormula(sheet, source, data) {
   if (source === 'spell') return data.damage || null;
   if (source === 'item') return data.usable?.damage || null;
   return null;
+}
+
+// Данные для всплывающей подсказки при наведении на иконку в хотбаре —
+// то же самое, что игрок видит на строке атаки/заклинания/предмета в
+// листе персонажа, но собранное в один объект для HotbarIcon.
+function buildTooltip(sheet, source, data) {
+  if (source === 'attack') {
+    return {
+      title: data.name,
+      subtitle: 'Атака',
+      meta: [castingTimeLabel(data)],
+      rollLabel: 'Атака', rollValue: formatMod(weaponAttackTotal(sheet, data)),
+      damage: data.damage ? weaponDamageFormula(sheet, data) : null,
+      desc: data.desc,
+    };
+  }
+  if (source === 'spell') {
+    const meta = [castingTimeLabel(data)];
+    if (data.range != null) meta.push(`${data.range} фт`);
+    if (data.concentration) meta.push('Концентрация');
+    const aoe = aoeLabel(data.aoe);
+    if (aoe) meta.push(aoe);
+
+    let rollLabel = null, rollValue = null;
+    if (data.save) { rollLabel = `СЛ (${ABILITY_LABELS[data.save]})`; const dc = spellSaveDC(sheet); rollValue = dc != null ? dc : '—'; }
+    else if (data.damage) { const atk = spellAttackTotal(sheet); rollLabel = 'Атака'; rollValue = atk != null ? formatMod(atk) : '—'; }
+
+    return {
+      title: data.name,
+      subtitle: spellTierLabel(data.tier ?? 0),
+      meta,
+      rollLabel, rollValue,
+      damage: data.damage || null,
+      desc: data.desc,
+    };
+  }
+  // item
+  const usable = data.usable || {};
+  const meta = [];
+  if (usable.range != null) meta.push(`${usable.range} фт`);
+  const aoe = aoeLabel(usable.aoe);
+  if (aoe) meta.push(aoe);
+  return {
+    title: data.name,
+    subtitle: usable.type === 'attack' ? 'Атака (предмет)' : 'Эффект (предмет)',
+    meta,
+    rollLabel: null, rollValue: null,
+    damage: usable.damage || null,
+    desc: data.description,
+  };
 }
 
 export default function Hotbar({ roomId }) {
@@ -49,16 +102,16 @@ export default function Hotbar({ roomId }) {
 
   return (
     <div style={styles.bar}>
-      <Section items={sheet.attacks} activeId={activeAction?.data?.id} onClick={(a) => toggle('attack', a)} />
+      <Section items={sheet.attacks} source="attack" sheet={sheet} activeId={activeAction?.data?.id} onClick={(a) => toggle('attack', a)} />
       <div style={styles.divider} />
-      <Section items={sheet.spells} activeId={activeAction?.data?.id} onClick={(s) => toggle('spell', s)} />
+      <Section items={sheet.spells} source="spell" sheet={sheet} activeId={activeAction?.data?.id} onClick={(s) => toggle('spell', s)} />
       <div style={styles.divider} />
-      <Section items={usableItems} activeId={activeAction?.data?.id} onClick={(i) => toggle('item', i)} />
+      <Section items={usableItems} source="item" sheet={sheet} activeId={activeAction?.data?.id} onClick={(i) => toggle('item', i)} />
     </div>
   );
 }
 
-function Section({ items, activeId, onClick }) {
+function Section({ items, source, sheet, activeId, onClick }) {
   if (!items || items.length === 0) return <div style={styles.emptySection} />;
   return (
     <div style={styles.section}>
@@ -69,6 +122,7 @@ function Section({ items, activeId, onClick }) {
           iconUrl={item.icon_url || item.usable?.icon_url}
           active={activeId === item.id}
           onClick={() => onClick(item)}
+          tooltip={buildTooltip(sheet, source, item)}
         />
       ))}
     </div>
