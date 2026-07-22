@@ -74,6 +74,7 @@ export default function Hotbar({ roomId }) {
   const clearTargetPreview = useBattleMapStore((s) => s.clearTargetPreview);
 
   const [sheet, setSheet] = useState(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     if (!controlledCharacterId) { setSheet(null); return; }
@@ -101,12 +102,29 @@ export default function Hotbar({ roomId }) {
   }
 
   return (
-    <div style={styles.bar}>
-      <Section items={sheet.attacks} source="attack" sheet={sheet} activeId={activeAction?.data?.id} onClick={(a) => toggle('attack', a)} />
-      <div style={styles.divider} />
-      <Section items={sheet.spells} source="spell" sheet={sheet} activeId={activeAction?.data?.id} onClick={(s) => toggle('spell', s)} />
-      <div style={styles.divider} />
-      <Section items={usableItems} source="item" sheet={sheet} activeId={activeAction?.data?.id} onClick={(i) => toggle('item', i)} />
+    // Центрирование через left:50%+transform на самом баре ломало перенос
+    // строк: для абсолютно спозиционированного элемента с left, но без
+    // right, браузер считает доступную для авто-ширины/wrap площадь от
+    // left до правого края контейнера — то есть только половину экрана,
+    // transform сдвигает уже готовый результат чисто визуально. Поэтому
+    // внешний слой растянут на всю ширину (left/right:0) без transform, а
+    // центрирование и сама карточка с переносом строк — уже внутри него.
+    <div style={styles.centerLayer}>
+      <div style={collapsed ? { ...styles.bar, ...styles.barCollapsed } : styles.bar}>
+        <Section items={sheet.attacks} source="attack" sheet={sheet} activeId={activeAction?.data?.id} onClick={(a) => toggle('attack', a)} />
+        <div style={styles.divider} />
+        <Section items={sheet.spells} source="spell" sheet={sheet} activeId={activeAction?.data?.id} onClick={(s) => toggle('spell', s)} />
+        <div style={styles.divider} />
+        <Section items={usableItems} source="item" sheet={sheet} activeId={activeAction?.data?.id} onClick={(i) => toggle('item', i)} />
+      </div>
+      <button
+        onClick={() => setCollapsed((v) => !v)}
+        title={collapsed ? 'Показать все действия' : 'Свернуть до одной строки'}
+        aria-label={collapsed ? 'Показать все действия' : 'Свернуть до одной строки'}
+        style={styles.collapseButton}
+      >
+        {collapsed ? '▲' : '▼'}
+      </button>
     </div>
   );
 }
@@ -129,13 +147,39 @@ function Section({ items, source, sheet, activeId, onClick }) {
   );
 }
 
+// При большом числе действий каждая секция переносит иконки на новую
+// строку сама (а не растягивает бар по горизонтали); высота бара растёт
+// вместе с ней до ~3 рядов, после чего дальше растущий контент уходит
+// под вертикальный скролл внутри бара, а не обрезается за пределы экрана.
+const HOTBAR_ROW_HEIGHT = 48 + 6; // высота иконки + gap строки
+const HOTBAR_MAX_ROWS = 3;
+
 const styles = {
-  bar: {
-    position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
-    background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 12,
-    padding: 10, display: 'flex', alignItems: 'center', gap: 10, zIndex: 10, maxWidth: '90vw', overflowX: 'auto',
+  centerLayer: {
+    position: 'absolute', bottom: 12, left: 0, right: 0, zIndex: 10,
+    display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 8, pointerEvents: 'none',
   },
-  section: { display: 'flex', gap: 6 },
+  bar: {
+    background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 12,
+    padding: 10, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start',
+    alignItems: 'stretch', gap: 10, pointerEvents: 'auto',
+    maxWidth: '96vw',
+    maxHeight: HOTBAR_ROW_HEIGHT * HOTBAR_MAX_ROWS + 20,
+    overflowY: 'auto',
+  },
+  // Свёрнутый вид — только первый ряд каждой секции, остальное просто
+  // обрезается (overflow:hidden, без скролла — сворачивание задумано как
+  // временное "убрать с глаз", а не ещё один способ пролистать список)
+  barCollapsed: { maxHeight: HOTBAR_ROW_HEIGHT + 20, overflow: 'hidden' },
+  collapseButton: {
+    width: 28, height: 28, padding: 0, borderRadius: 8, fontSize: 11, lineHeight: 1, flexShrink: 0, pointerEvents: 'auto',
+    background: 'var(--surface-1)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+  },
+  section: {
+    display: 'flex', flexWrap: 'wrap', alignContent: 'flex-start', gap: 6,
+    maxWidth: 5 * 48 + 4 * 6 + 2, // 5 иконок в ряд (+2px запаса на округление), дальше — перенос строки
+    flexShrink: 0,
+  },
   emptySection: { minWidth: 4 },
-  divider: { width: 1, alignSelf: 'stretch', background: 'var(--border)' },
+  divider: { width: 1, alignSelf: 'stretch', background: 'var(--border)', flexShrink: 0 },
 };
