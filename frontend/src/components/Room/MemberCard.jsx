@@ -38,7 +38,7 @@ const styles = {
   card: { display: 'flex', alignItems: 'center', gap: 10 },
   avatar: {
     width: 40, height: 40, borderRadius: '50%', backgroundSize: 'cover', backgroundPosition: 'center',
-    background: 'var(--surface-2)', border: '1px solid var(--border)', flexShrink: 0,
+    backgroundColor: 'var(--surface-2)', border: '1px solid var(--border)', flexShrink: 0,
   },
   username: { fontWeight: 600, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 },
   gmBadge: { fontSize: 10, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 4, padding: '0 4px' },

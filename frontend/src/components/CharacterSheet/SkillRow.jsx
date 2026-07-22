@@ -13,6 +13,19 @@ export default function SkillRow({
   bonus, total, advantage, disadvantage, onChangeProf, onChangeBonus, stretch = true,
 }) {
   const [modalOpen, setModalOpen] = useState(false);
+  const [draftBonus, setDraftBonus] = useState(bonus ?? 0);
+
+  function handleOpen() {
+    setDraftBonus(bonus ?? 0);
+    setModalOpen(true);
+  }
+
+  // применяем правку только при закрытии окна — иначе каждая нажатая
+  // клавиша дёргает стору целиком и подвешивает интерфейс
+  function handleClose() {
+    setModalOpen(false);
+    onChangeBonus(draftBonus);
+  }
 
   return (
     <Group gap={6} wrap="nowrap">
@@ -24,11 +37,12 @@ export default function SkillRow({
         label={a11yLabel}
       />
       <UnstyledButton
-        onClick={() => setModalOpen(true)}
+        onClick={handleOpen}
         style={stretch ? { flex: 1, textAlign: 'left' } : { textAlign: 'left' }}
         aria-label={`открыть ${a11yLabel}`}
       >
-        <Text size="sm">{displayLabel}</Text>
+        {/* <Text size="sm">{displayLabel}</Text> */}
+        <Text size={stretch ? 'sm' : 'xs'} c={stretch ? undefined : 'dimmed'}>{displayLabel}</Text>
       </UnstyledButton>
       <UnstyledButton onClick={() => rollAndNotify(a11yLabel, total, { advantage, disadvantage })}>
         <Badge variant="light" className="mono" style={{ cursor: 'pointer', minWidth: 42 }}>
@@ -37,13 +51,13 @@ export default function SkillRow({
       </UnstyledButton>
 
       <Modal
-        opened={modalOpen} onClose={() => setModalOpen(false)} title={displayLabel}
+        opened={modalOpen} onClose={handleClose} title={displayLabel}
         centered size="xs" closeButtonProps={{ 'aria-label': 'Закрыть' }}
       >
         <NumberInput
           label="Ручная поправка"
-          value={bonus ?? 0}
-          onChange={(v) => onChangeBonus(typeof v === 'number' ? v : 0)}
+          value={draftBonus}
+          onChange={(v) => setDraftBonus(typeof v === 'number' ? v : 0)}
           autoFocus
         />
       </Modal>
