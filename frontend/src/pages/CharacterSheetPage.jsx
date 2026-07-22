@@ -176,47 +176,29 @@ export default function CharacterSheetPage() {
           <Grid.Col span={{ base: 12, md: 6 }}>
             <StatusRow sheet={sheet} set={set} />
 
-            <Tabs defaultValue="equipment" keepMounted={false}>
+            <Tabs defaultValue="attacks" keepMounted={false}>
               <Tabs.List>
-                <Tabs.Tab value="equipment">Снаряжение</Tabs.Tab>
-                <Tabs.Tab value="features">Способности</Tabs.Tab>
                 <Tabs.Tab value="attacks">Атаки</Tabs.Tab>
+                <Tabs.Tab value="features">Способности</Tabs.Tab>
+                <Tabs.Tab value="equipment">Снаряжение</Tabs.Tab>
                 <Tabs.Tab value="spells">Заклинания</Tabs.Tab>
                 <Tabs.Tab value="bio">Био</Tabs.Tab>
               </Tabs.List>
 
-              <Tabs.Panel value="equipment" pt="md">
-                <Paper withBorder p="md" mb="md">
-                  <Textarea
-                    label="Прочее снаряжение (текстом)"
-                    value={sheet.text?.equipment || ''}
-                    onChange={(e) => set(['text', 'equipment'], e.target.value)}
-                    autosize minRows={2}
-                    placeholder="Факел, верёвка 15м, спальный мешок..."
-                  />
+              <Tabs.Panel value="attacks" pt="md">
+                <Paper withBorder p="md">
+                  {(sheet.attacks || []).map((attack) => (
+                    <AttackRow key={attack.id} attack={attack} sheet={sheet} onEdit={() => openAttackModal(attack)} />
+                  ))}
+                  {(sheet.attacks || []).length === 0 && (
+                    <Text size="sm" c="dimmed" mb="sm">Пока нет атак — добавь удар мечом или выстрел из лука.</Text>
+                  )}
+                  <Button variant="light" mt="sm" onClick={() => openAttackModal(null)}>+ Добавить атаку</Button>
                 </Paper>
 
-                <Group justify="space-between" mb="sm">
-                  <Text size="sm" fw={600} c="dimmed" tt="uppercase">Предметы с бонусами</Text>
-                  <Button size="xs" variant="light" onClick={() => openItemModal(null)}>+ Добавить предмет</Button>
-                </Group>
-                <Stack gap="xs">
-                  {(sheet.items || []).map((item) => (
-                    <ItemCard
-                      key={item.id}
-                      item={item}
-                      onEdit={() => openItemModal(item)}
-                      onToggleEquipped={(equipped) => updateItemField(item.id, { equipped })}
-                    />
-                  ))}
-                  {(sheet.items || []).length === 0 && (
-                    <Text size="sm" c="dimmed">Пока нет предметов с автобонусом — добавь кольцо, оружие или зелье выше.</Text>
-                  )}
-                </Stack>
-
-                <ItemModal
-                  opened={itemModalOpen} onClose={() => setItemModalOpen(false)} item={editingItem}
-                  onSave={saveItem} onDelete={() => editingItem && deleteItem(editingItem.id)}
+                <AttackModal
+                  opened={attackModalOpen} onClose={() => setAttackModalOpen(false)} attack={editingAttack}
+                  onSave={saveAttack} onDelete={() => editingAttack && deleteAttack(editingAttack.id)}
                 />
               </Tabs.Panel>
 
@@ -250,20 +232,38 @@ export default function CharacterSheetPage() {
                 />
               </Tabs.Panel>
 
-              <Tabs.Panel value="attacks" pt="md">
-                <Paper withBorder p="md">
-                  {(sheet.attacks || []).map((attack) => (
-                    <AttackRow key={attack.id} attack={attack} sheet={sheet} onEdit={() => openAttackModal(attack)} />
-                  ))}
-                  {(sheet.attacks || []).length === 0 && (
-                    <Text size="sm" c="dimmed" mb="sm">Пока нет атак — добавь удар мечом или выстрел из лука.</Text>
-                  )}
-                  <Button variant="light" mt="sm" onClick={() => openAttackModal(null)}>+ Добавить атаку</Button>
+              <Tabs.Panel value="equipment" pt="md">
+                <Paper withBorder p="md" mb="md">
+                  <Textarea
+                    label="Прочее снаряжение (текстом)"
+                    value={sheet.text?.equipment || ''}
+                    onChange={(e) => set(['text', 'equipment'], e.target.value)}
+                    autosize minRows={2}
+                    placeholder="Факел, верёвка 15м, спальный мешок..."
+                  />
                 </Paper>
 
-                <AttackModal
-                  opened={attackModalOpen} onClose={() => setAttackModalOpen(false)} attack={editingAttack}
-                  onSave={saveAttack} onDelete={() => editingAttack && deleteAttack(editingAttack.id)}
+                <Group justify="space-between" mb="sm">
+                  <Text size="sm" fw={600} c="dimmed" tt="uppercase">Предметы с бонусами</Text>
+                  <Button size="xs" variant="light" onClick={() => openItemModal(null)}>+ Добавить предмет</Button>
+                </Group>
+                <Stack gap="xs">
+                  {(sheet.items || []).map((item) => (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      onEdit={() => openItemModal(item)}
+                      onToggleEquipped={(equipped) => updateItemField(item.id, { equipped })}
+                    />
+                  ))}
+                  {(sheet.items || []).length === 0 && (
+                    <Text size="sm" c="dimmed">Пока нет предметов с автобонусом — добавь кольцо, оружие или зелье выше.</Text>
+                  )}
+                </Stack>
+
+                <ItemModal
+                  opened={itemModalOpen} onClose={() => setItemModalOpen(false)} item={editingItem}
+                  onSave={saveItem} onDelete={() => editingItem && deleteItem(editingItem.id)}
                 />
               </Tabs.Panel>
 

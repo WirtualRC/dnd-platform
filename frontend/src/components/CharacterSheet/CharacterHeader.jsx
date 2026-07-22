@@ -1,13 +1,19 @@
 import { useState } from 'react';
-import { Paper, Avatar, TextInput, Modal, Group, Stack, UnstyledButton } from '@mantine/core';
+import { Paper, Avatar, TextInput, Modal, Group, Stack, UnstyledButton, Text } from '@mantine/core';
 import EditableNumberStat from './EditableNumberStat';
 import RaceClassStat from './RaceClassStat';
 import HpStat from './HpStat';
 import IconUploadField from './IconUploadField';
+import CurrencyModal from './CurrencyModal';
+
+const COIN_RATE_TO_GP = { cp: 0.01, sp: 0.1, ep: 0.5, gp: 1, pp: 10 };
 
 export default function CharacterHeader({ current, sheet, updateName, updateAvatarUrl, set }) {
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
+  const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const vitality = sheet.vitality || {};
+  const coins = sheet.coins || {};
+  const totalGold = Object.entries(COIN_RATE_TO_GP).reduce((sum, [key, rate]) => sum + (coins[key] || 0) * rate, 0);
 
   return (
     <Paper withBorder p="md" mb="md">
@@ -37,7 +43,10 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
           <EditableNumberStat label="КД" value={vitality.ac} onChange={(v) => set(['vitality', 'ac'], v)} />
           <EditableNumberStat label="Скорость" value={vitality.speed} suffix=" фт" onChange={(v) => set(['vitality', 'speed'], v)} />
           <EditableNumberStat label="Бонус влад." value={sheet.proficiency_bonus} onChange={(v) => set(['proficiency_bonus'], v)} />
-          <EditableNumberStat label="Золото" value={sheet.coins?.gp} onChange={(v) => set(['coins', 'gp'], v)} />
+          <UnstyledButton onClick={() => setCurrencyModalOpen(true)} style={{ textAlign: 'center', padding: '2px 6px' }} aria-label="открыть золото">
+            <Text size="10px" c="dimmed" tt="uppercase" style={{ letterSpacing: 0.4 }}>Золото</Text>
+            <Text fw={700} size="lg" className="mono" style={{ color: '#e0b34e' }}>{Math.round(totalGold * 100) / 100}</Text>
+          </UnstyledButton>
           <HpStat
             current={vitality.hp_current}
             max={vitality.hp_max}
@@ -52,6 +61,13 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
       <Modal opened={avatarModalOpen} onClose={() => setAvatarModalOpen(false)} title="Аватар" centered size="xs" closeButtonProps={{ 'aria-label': 'Закрыть' }}>
         <IconUploadField value={current.avatar_url} onChange={updateAvatarUrl} size={64} />
       </Modal>
+
+      <CurrencyModal
+        opened={currencyModalOpen}
+        onClose={() => setCurrencyModalOpen(false)}
+        coins={coins}
+        onChange={(next) => set(['coins'], next)}
+      />
     </Paper>
   );
 }
