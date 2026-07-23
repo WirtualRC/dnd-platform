@@ -1,12 +1,20 @@
 import os
+from pathlib import Path
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from .config import config_by_name
 from .extensions import db, login_manager, socketio
 
+# Собранный React-фронтенд (frontend/dist после `npm run build`) — отдаём
+# его тем же Flask-процессом, чтобы наружу (через туннель/nginx) торчал
+# только один origin и не пришлось разбираться с CORS и cross-site cookie
+FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / 'frontend' / 'dist'
+
 
 def create_app(config_name: str = None) -> Flask:
-    app = Flask(__name__, static_folder='static')
+    # static_folder=None отключает автоматический роут Flask на /static/...,
+    # раздачей фронтенда занимается кастомный catch-all роут ниже
+    app = Flask(__name__, static_folder=None)
 
     if config_name is None:
         config_name = os.getenv('FLASK_ENV', 'development')
@@ -59,13 +67,22 @@ def create_app(config_name: str = None) -> Flask:
     # сам факт импорта регистрирует @socketio.on(...) хендлеры
     from .sockets import events
 
-    @app.route('/')
-    def index():
-        return send_from_directory(app.static_folder, 'index.html')
-
-    @app.route('/battlemap')
-    def battlemap_page():
-        return send_from_directory(app.static_folder, 'battlemap.html')
+    # SPA-фронтенд на React Router (BrowserRouter): любой путь, который не
+    # является реальным файлом в dist (например /room/5 при обновлении
+    # страницы), должен отдавать index.html, а React Router уже сам
+    # разберётся с маршрутом на клиенте. Литеральные префиксы /api/v1/... и
+    # /uploads/... выше по приоритету у Werkzeug и никогда сюда не попадут.
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve_frontend(path):
+        target = FRONTEND_DIST / path
+        if path and target.is_file():
+            return send_from_directory(FRONTEND_DIST, path)
+        if not (FRONTEND_DIST / 'index.html').is_file():
+            return jsonify({
+                "error": "Frontend build not found. Run `npm run build` in frontend/ first."
+            }), 501
+        return send_from_directory(FRONTEND_DIST, 'index.html')
 
     with app.app_context():
         from . import models
