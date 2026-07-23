@@ -22,7 +22,7 @@ export default function LoginPage() {
   return (
     <div className="theme-dark" style={styles.page}>
       <div style={styles.card} className="card">
-        <h1 style={styles.title}>Чернильный чертог</h1>
+        <h1 style={styles.title}>Истории победы</h1>
         <p style={styles.subtitle}>лист персонажа и стол мастера в одном месте</p>
 
         <div style={styles.tabs}>
