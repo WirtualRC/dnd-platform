@@ -220,3 +220,5 @@ backend/structure.json
 backend/uploads/*
 # frontend*
 CLAUDE.md
+.claude/
+.vscode/

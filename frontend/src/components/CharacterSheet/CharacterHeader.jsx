@@ -17,32 +17,38 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
 
   return (
     <Paper withBorder p="md" mb="md">
-      <Group align="center" gap="lg" wrap="wrap">
-        <UnstyledButton onClick={() => setAvatarModalOpen(true)} aria-label="открыть аватар">
-          <Avatar src={current.avatar_url || undefined} size={72} radius="xl" />
-        </UnstyledButton>
+      <Group align="center" gap="lg" wrap="wrap" justify="space-between">
+        <Group align="center" gap="lg" wrap="wrap">
+          <UnstyledButton onClick={() => setAvatarModalOpen(true)} aria-label="открыть аватар">
+            <Avatar src={current.avatar_url || undefined} size={72} radius="xl" />
+          </UnstyledButton>
 
-        <Stack gap={2} style={{ minWidth: 180 }}>
-          <TextInput
-            value={current.name}
-            onChange={(e) => updateName(e.target.value)}
-            variant="unstyled"
-            placeholder="имя персонажа"
-            styles={{ input: { fontSize: 24, fontWeight: 700, color: 'var(--accent)', padding: 0 } }}
-          />
-          <RaceClassStat
-            race={sheet.race}
-            className={sheet.class_name}
-            onChangeRace={(v) => set(['race'], v)}
-            onChangeClass={(v) => set(['class_name'], v)}
-          />
-        </Stack>
+          <Stack gap={2} align="flex-start">
+            <TextInput
+              value={current.name}
+              onChange={(e) => updateName(e.target.value)}
+              variant="unstyled"
+              placeholder="имя персонажа"
+              styles={{ input: { fontSize: 24, fontWeight: 700, color: 'white', padding: 0, width: 'auto', fieldSizing: 'content' } }}
+            />
+            <RaceClassStat
+              race={sheet.race}
+              className={sheet.class_name}
+              onChangeRace={(v) => set(['race'], v)}
+              onChangeClass={(v) => set(['class_name'], v)}
+            />
+          </Stack>
 
-        <Group gap="xs" wrap="wrap" style={{ flex: 1 }}>
           <EditableNumberStat label="Уровень" value={sheet.level} onChange={(v) => set(['level'], v)} />
+        </Group>
+
+        <Group gap="60" wrap="wrap">
           <EditableNumberStat label="КД" value={vitality.ac} onChange={(v) => set(['vitality', 'ac'], v)} />
           <EditableNumberStat label="Скорость" value={vitality.speed} suffix=" фт" onChange={(v) => set(['vitality', 'speed'], v)} />
           <EditableNumberStat label="Бонус влад." value={sheet.proficiency_bonus} onChange={(v) => set(['proficiency_bonus'], v)} />
+        </Group>
+
+        <Group gap="xs" wrap="wrap">
           <UnstyledButton onClick={() => setCurrencyModalOpen(true)} style={{ textAlign: 'center', padding: '2px 6px' }} aria-label="открыть золото">
             <Text size="10px" c="dimmed" tt="uppercase" style={{ letterSpacing: 0.4 }}>Золото</Text>
             <Text fw={700} size="lg" className="mono" style={{ color: '#e0b34e' }}>{Math.round(totalGold * 100) / 100}</Text>
