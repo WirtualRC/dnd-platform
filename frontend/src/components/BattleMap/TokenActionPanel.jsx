@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { TOKEN_LAYERS } from './tokenLayers';
+import { STANDARD_CONDITIONS } from '../../utils/conditions';
 
 const LockIcon = ({ locked }) => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -30,25 +31,53 @@ const TrashIcon = () => (
   </svg>
 );
 
+const MoreIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="12" cy="5" r="1.8" />
+    <circle cx="12" cy="12" r="1.8" />
+    <circle cx="12" cy="19" r="1.8" />
+  </svg>
+);
+
 // Плавающая панель действий под выбранным токеном — позиция задаётся в
 // экранных координатах (x,y = нижняя точка токена), пересчитывается
 // снаружи при каждом пане/зуме карты
-export default function TokenActionPanel({ x, y, locked, layer, canDelete, onToggleLock, onSetLayer, onDelete }) {
+export default function TokenActionPanel({
+  x, y, locked, layer, canDelete, onToggleLock, onSetLayer, onDelete,
+  conditions, onToggleCondition,
+}) {
   const [layerMenuOpen, setLayerMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [conditionsMenuOpen, setConditionsMenuOpen] = useState(false);
   const containerRef = useRef(null);
 
   useEffect(() => {
-    if (!layerMenuOpen) return undefined;
+    if (!layerMenuOpen && !moreMenuOpen && !conditionsMenuOpen) return undefined;
     function handleOutside(e) {
-      if (containerRef.current && !containerRef.current.contains(e.target)) setLayerMenuOpen(false);
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setLayerMenuOpen(false);
+        setMoreMenuOpen(false);
+        setConditionsMenuOpen(false);
+      }
     }
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
-  }, [layerMenuOpen]);
+  }, [layerMenuOpen, moreMenuOpen, conditionsMenuOpen]);
 
-  // закрытая панель слоёв не должна тихо переживать переключение на
-  // другой токен под тем же экранным местом
-  useEffect(() => { setLayerMenuOpen(false); }, [x, y]);
+  // закрытые меню не должны тихо переживать переключение на другой токен
+  // под тем же экранным местом
+  useEffect(() => {
+    setLayerMenuOpen(false);
+    setMoreMenuOpen(false);
+    setConditionsMenuOpen(false);
+  }, [x, y]);
+
+  function toggleCondition(label) {
+    const next = conditions.includes(label)
+      ? conditions.filter((c) => c !== label)
+      : [...conditions, label];
+    onToggleCondition(next);
+  }
 
   return (
     <div ref={containerRef} style={{ ...styles.wrap, left: x, top: y }}>
@@ -67,7 +96,7 @@ export default function TokenActionPanel({ x, y, locked, layer, canDelete, onTog
           className="ghost"
           style={{ ...styles.btn, ...(layerMenuOpen ? styles.btnActive : {}) }}
           title="Слой токена"
-          onClick={() => setLayerMenuOpen((v) => !v)}
+          onClick={() => { setMoreMenuOpen(false); setLayerMenuOpen((v) => !v); }}
         >
           <LayersIcon />
         </button>
@@ -81,7 +110,48 @@ export default function TokenActionPanel({ x, y, locked, layer, canDelete, onTog
         >
           <TrashIcon />
         </button>
+        <button
+          type="button"
+          className="ghost"
+          style={{ ...styles.btn, ...(moreMenuOpen ? styles.btnActive : {}) }}
+          title="Ещё"
+          onClick={() => { setLayerMenuOpen(false); setConditionsMenuOpen(false); setMoreMenuOpen((v) => !v); }}
+        >
+          <MoreIcon />
+        </button>
       </div>
+
+      {moreMenuOpen && !conditionsMenuOpen && (
+        <div style={styles.layerMenu}>
+          <button
+            type="button"
+            className="ghost"
+            style={styles.layerItem}
+            onClick={() => setConditionsMenuOpen(true)}
+          >
+            Состояния{conditions.length > 0 ? ` (${conditions.length})` : ''}
+          </button>
+        </div>
+      )}
+
+      {moreMenuOpen && conditionsMenuOpen && (
+        <div style={{ ...styles.layerMenu, maxHeight: 260, overflowY: 'auto' }}>
+          <button type="button" className="ghost" style={styles.submenuBack} onClick={() => setConditionsMenuOpen(false)}>
+            ← Состояния
+          </button>
+          {STANDARD_CONDITIONS.map((label) => (
+            <button
+              key={label}
+              type="button"
+              className="ghost"
+              style={{ ...styles.layerItem, ...(conditions.includes(label) ? styles.layerItemActive : {}) }}
+              onClick={() => toggleCondition(label)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {layerMenuOpen && (
         <div style={styles.layerMenu}>
@@ -130,5 +200,9 @@ const styles = {
   },
   layerItemActive: {
     background: 'var(--surface-2)', color: 'var(--text)',
+  },
+  submenuBack: {
+    textAlign: 'left', padding: '6px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+    color: 'var(--text)', marginBottom: 2, borderBottom: '1px solid var(--border)',
   },
 };

@@ -175,8 +175,17 @@ def update_character(char_id):
     # те, кто смотрит на ростер в этот момент, должны увидеть изменение
     # без перезагрузки страницы. Один персонаж может быть активен сразу в
     # нескольких комнатах (см. CharacterRoomLink), поэтому рассылаем всем.
-    memberships = RoomMembership.query.filter_by(active_character_id=character.id).all()
-    if memberships:
+    # Отдельно добавляем комнаты, где персонаж просто стоит токеном на
+    # карте (не обязательно "активен" в ростере) — иначе правка состояний
+    # с листа не долетала бы живьём до панели токена на боевой карте.
+    active_room_ids = {
+        m.room_id for m in RoomMembership.query.filter_by(active_character_id=character.id).all()
+    }
+    token_room_ids = {
+        bm.room_id for bm in BattleMap.query.join(Token).filter(Token.character_id == character.id).all()
+    }
+    room_ids = active_room_ids | token_room_ids
+    if room_ids:
         vitality = character.sheet_data.get("vitality", {})
         payload = {
             "character_id": character.id,
@@ -185,9 +194,10 @@ def update_character(char_id):
             "hp_current": vitality.get("hp_current"),
             "hp_max": vitality.get("hp_max"),
             "ac": vitality.get("ac"),
+            "conditions": character.sheet_data.get("conditions", []),
         }
-        for m in memberships:
-            socketio.emit('character_updated', payload, room=str(m.room_id))
+        for room_id in room_ids:
+            socketio.emit('character_updated', payload, room=str(room_id))
 
     return jsonify({
         "message": "Character updated successfully",

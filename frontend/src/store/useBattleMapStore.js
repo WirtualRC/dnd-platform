@@ -171,6 +171,19 @@ export const useBattleMapStore = create((set, get) => ({
     getSocket().emit('token_update_props', { room_id: roomId, token_id: tokenId, layer });
   },
 
+  // conditions — полный список строк-состояний (не патч на один элемент),
+  // тем же принципом, что и ConditionsStat на листе персонажа. Для
+  // обычных (не instance) токенов бэкенд пишет прямо в character.sheet_data,
+  // так что это одновременно и правка листа персонажа.
+  setTokenConditions(roomId, tokenId, conditions) {
+    getSocket().emit('token_update_state', { room_id: roomId, token_id: tokenId, patch: { conditions } });
+    set((state) => (
+      state.tokens[tokenId]
+        ? { tokens: { ...state.tokens, [tokenId]: { ...state.tokens[tokenId], conditions } } }
+        : state
+    ));
+  },
+
   addFogShape(roomId, mapId, { shapeType, x, y, width, height }) {
     getSocket().emit('fog_shape_add', {
       room_id: roomId, battle_map_id: mapId, shape_type: shapeType,
@@ -245,6 +258,26 @@ export const useBattleMapStore = create((set, get) => ({
       ));
     });
 
+    // HP и conditions другого участника (или своё же эхо) — vitality_patch
+    // мержим по ключам, conditions (если пришёл) заменяем целиком, тем же
+    // принципом, что и на бэке
+    socket.on('token_state_changed', (data) => {
+      set((state) => {
+        const t = state.tokens[data.token_id];
+        if (!t) return state;
+        return {
+          tokens: {
+            ...state.tokens,
+            [data.token_id]: {
+              ...t,
+              ...(data.vitality_patch || {}),
+              ...(data.conditions !== null && data.conditions !== undefined ? { conditions: data.conditions } : {}),
+            },
+          },
+        };
+      });
+    });
+
     socket.on('fog_shape_added', (data) => {
       set((state) => ({ fogShapes: { ...state.fogShapes, [data.id]: data } }));
     });
@@ -279,13 +312,14 @@ export const useBattleMapStore = create((set, get) => ({
     socket.on('fog_cleared', () => { set({ fogShapes: {} }); });
 
     // PUT /characters/<id> (например, правка листа в соседней вкладке)
-    // рассылает это же событие всем комнатам, где персонаж активен — здесь
-    // подхватываем его для токенов отряда на карте. hp_current/hp_max/ac
-    // у не-instance токена и так вычисляются на бэке заново из
-    // character.sheet_data при каждой загрузке карты (см. rooms/routes.py),
-    // то есть это не боевое состояние токена, а просто отражение листа —
-    // синхронизировать его живьём безопасно. instance-токены (клоны/призывы)
-    // намеренно не трогаем: у них своя снятая копия sheet_data.
+    // рассылает это же событие всем комнатам, где персонаж активен ИЛИ
+    // просто стоит токеном на карте — здесь подхватываем его для токенов
+    // отряда на карте. hp_current/hp_max/ac/conditions у не-instance
+    // токена и так вычисляются на бэке заново из character.sheet_data при
+    // каждой загрузке карты (см. rooms/routes.py), то есть это не боевое
+    // состояние токена, а просто отражение листа — синхронизировать его
+    // живьём безопасно. instance-токены (клоны/призывы) намеренно не
+    // трогаем: у них своя снятая копия sheet_data.
     socket.on('character_updated', (data) => {
       set((state) => {
         let changed = false;
@@ -300,6 +334,7 @@ export const useBattleMapStore = create((set, get) => ({
               hp_current: data.hp_current,
               hp_max: data.hp_max,
               ac: data.ac,
+              conditions: data.conditions ?? t.conditions,
             };
           }
         });

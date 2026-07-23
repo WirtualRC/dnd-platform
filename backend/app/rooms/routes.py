@@ -381,6 +381,7 @@ def get_battle_map(room_id, map_id):
             "hp_current": vitality.get("hp_current"),
             "hp_max": vitality.get("hp_max"),
             "ac": vitality.get("ac"),
+            "conditions": (live_sheet or {}).get("conditions", []),
         })
 
     # геометрия тумана войны не секрет (скрыто то, что под ней, а не сама

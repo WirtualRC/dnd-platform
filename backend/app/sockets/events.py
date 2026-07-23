@@ -41,6 +41,7 @@ def _serialize_placed_token(token):
         'hp_current': vitality.get('hp_current'),
         'hp_max': vitality.get('hp_max'),
         'ac': vitality.get('ac'),
+        'conditions': (live_sheet or {}).get('conditions', []),
     }
 
 
@@ -439,20 +440,20 @@ def handle_place_template(data):
 
 @socketio.on('token_update_state')
 def handle_update_state(data):
-    """Обновляет боевое состояние токена — HP и в будущем состояния/заряды
-    ресурсов — ОДНИМ событием вместо отдельного на каждый стат.
+    """Обновляет боевое состояние токена — HP и состояния (conditions) —
+    ОДНИМ событием вместо отдельного на каждый стат.
 
     Специально не объединено с token_transform_* (позиция/поворот): та
     пара нужна именно из-за троттлинга на каждый кадр драга, а это —
     редкие, всегда мгновенно коммитящиеся изменения с одинаковыми правами
     (GM или владелец персонажа), так что им один общий event подходит.
 
-    patch — частичный словарь, мержится в раздел vitality:
-        {"hp_current": 3}
+    patch — частичный словарь:
+        {"hp_current": 3}                — мержится в раздел vitality
         {"hp_current": 3, "hp_temp": 0}
-    Когда появятся состояния/ресурсы — либо расширить ALLOWED_VITALITY_KEYS,
-    либо завести соседний top-level раздел в data (например "conditions")
-    по той же схеме, не заводя новый socket-event.
+        {"conditions": ["Отравлен"]}      — заменяет соседний top-level
+                                             раздел conditions целиком
+    Оба раздела можно передать одним патчем.
     """
     ALLOWED_VITALITY_KEYS = {'hp_current', 'hp_temp'}
 
@@ -464,11 +465,21 @@ def handle_update_state(data):
         emit('error', {'message': 'Вы не участник этой комнаты'})
         return
 
-    if not patch or not set(patch.keys()) <= ALLOWED_VITALITY_KEYS:
-        emit('error', {'message': f'Патч может содержать только поля {ALLOWED_VITALITY_KEYS}'})
+    unknown_keys = set(patch.keys()) - ALLOWED_VITALITY_KEYS - {'conditions'}
+    if not patch or unknown_keys:
+        emit('error', {'message': f'Патч может содержать только поля {ALLOWED_VITALITY_KEYS | {"conditions"}}'})
         return
-    if any(not isinstance(v, int) or v < 0 for v in patch.values()):
+
+    vitality_patch = {k: v for k, v in patch.items() if k in ALLOWED_VITALITY_KEYS}
+    if vitality_patch and any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in vitality_patch.values()):
         emit('error', {'message': 'Значения HP должны быть неотрицательными целыми числами'})
+        return
+
+    conditions = patch.get('conditions')
+    if conditions is not None and (
+        not isinstance(conditions, list) or not all(isinstance(c, str) for c in conditions)
+    ):
+        emit('error', {'message': 'conditions должен быть списком строк'})
         return
 
     token = Token.query.get(token_id)
@@ -476,31 +487,46 @@ def handle_update_state(data):
         emit('error', {'message': 'Токен не найден в этой комнате'})
         return
 
-    is_owner = token.character_id is not None and is_character_owner(token.character_id, current_user.id)
-    if not (is_gm(room_id, current_user.id) or is_owner):
+    if not _can_manage_token(token, room_id, current_user.id):
         emit('error', {'message': 'Недостаточно прав менять состояние этого токена'})
         return
 
     if token.instance_data is not None:
-        # клонированный экземпляр — правим только его личную копию
+        # клонированный экземпляр (или безличный проп, уже получивший свой
+        # instance_data ниже) — правим только его личную копию
         new_data = dict(token.instance_data)
-        new_data['vitality'] = {**new_data.get('vitality', {}), **patch}
+        if vitality_patch:
+            new_data['vitality'] = {**new_data.get('vitality', {}), **vitality_patch}
+        if conditions is not None:
+            new_data['conditions'] = conditions
         token.instance_data = new_data
     elif token.character_id is not None:
         # обычный токен 1:1 — правим напрямую в листе персонажа
         character = Character.query.get(token.character_id)
         new_data = dict(character.sheet_data)
-        new_data['vitality'] = {**new_data.get('vitality', {}), **patch}
+        if vitality_patch:
+            new_data['vitality'] = {**new_data.get('vitality', {}), **vitality_patch}
+        if conditions is not None:
+            new_data['conditions'] = conditions
         character.sheet_data = new_data
+    elif conditions is not None and not vitality_patch:
+        # безличный проп/NPC без привязанного листа (например, NPC-токен
+        # без выбора персонажа в представлении) — HP тут отслеживать
+        # неоткуда (нет sheet_data.vitality с hp_max), но состояния —
+        # чистый список тегов, ему для этого лист не нужен. Заводим
+        # instance_data только под conditions, дальнейшие правки пойдут
+        # веткой выше.
+        token.instance_data = {'conditions': conditions}
     else:
-        emit('error', {'message': 'У токена нет данных персонажа для отслеживания состояния'})
+        emit('error', {'message': 'У токена нет данных персонажа для отслеживания HP'})
         return
 
     db.session.commit()
 
     emit('token_state_changed', {
         'token_id': token.id,
-        'vitality_patch': patch,
+        'vitality_patch': vitality_patch,
+        'conditions': conditions,
     }, room=str(room_id))
 
 

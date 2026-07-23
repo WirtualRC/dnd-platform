@@ -50,6 +50,7 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
   const removeToken = useBattleMapStore((s) => s.removeToken);
   const setTokenLocked = useBattleMapStore((s) => s.setTokenLocked);
   const setTokenLayer = useBattleMapStore((s) => s.setTokenLayer);
+  const setTokenConditions = useBattleMapStore((s) => s.setTokenConditions);
   const controlledTokenId = useBattleMapStore((s) => s.controlledTokenId);
   const activeAction = useBattleMapStore((s) => s.activeAction);
   const setActiveAction = useBattleMapStore((s) => s.setActiveAction);
@@ -658,8 +659,10 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
           locked={!!selectedToken.locked}
           layer={selectedToken.layer ?? 10}
           canDelete={canMoveToken(selectedToken)}
+          conditions={selectedToken.conditions || []}
           onToggleLock={() => setTokenLocked(roomId, selectedToken.id, !selectedToken.locked)}
           onSetLayer={(layer) => setTokenLayer(roomId, selectedToken.id, layer)}
+          onToggleCondition={(next) => setTokenConditions(roomId, selectedToken.id, next)}
           onDelete={() => {
             if (!window.confirm('Удалить токен с карты?')) return;
             removeToken(roomId, selectedToken.id);

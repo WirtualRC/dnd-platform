@@ -205,7 +205,7 @@ export default function CharacterSheetPage() {
               <Tabs.Panel value="features" pt="md">
                 <Paper withBorder p="md" mb="md">
                   <Textarea
-                    label="Прочие способности (текстом)"
+                    label="Прочие способности"
                     value={sheet.text?.features || ''}
                     onChange={(e) => set(['text', 'features'], e.target.value)}
                     autosize minRows={2}

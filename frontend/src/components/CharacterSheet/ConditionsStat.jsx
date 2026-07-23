@@ -1,11 +1,6 @@
 import { useState } from 'react';
 import { Paper, Text, UnstyledButton, Modal, TagsInput, Stack } from '@mantine/core';
-
-const STANDARD_CONDITIONS = [
-  'Ослеплён', 'Очарован', 'Оглушён', 'Испуган', 'Схвачен', 'Недееспособен',
-  'Невидим', 'Парализован', 'Окаменел', 'Отравлен', 'Ничком', 'Обездвижен',
-  'Ошеломлён', 'Без сознания',
-];
+import { STANDARD_CONDITIONS } from '../../utils/conditions';
 
 export default function ConditionsStat({ conditions, onChange, style }) {
   const [opened, setOpened] = useState(false);
