@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { getSocket } from '../api/socket';
 import { useAuthStore } from './useAuthStore';
 import { shiftPendingRollLabel } from '../utils/pendingRollLabels';
+import { shiftPendingRollEffect } from '../utils/pendingRollEffects';
 
 let listenersAttached = false;
 
@@ -101,14 +102,21 @@ export const useRoomStore = create((set, get) => ({
       // он и так уже виден в логе, отдельный тост был бы просто шумом.
       const me = useAuthStore.getState().user;
       if (me && data.user === me.username) {
-        const label = shiftPendingRollLabel();
-        if (label) {
-          notifications.show({
-            title: label,
-            message: `${data.breakdown} = ${data.result}`,
-            color: 'lssBlue',
-            autoClose: 4000,
-          });
+        // очередь эффектов (например, лечение зельем) проверяется первой —
+        // такие броски не должны ещё и всплывать генерическим тостом лейбла
+        const effect = shiftPendingRollEffect();
+        if (effect) {
+          effect(data.result, data.breakdown);
+        } else {
+          const label = shiftPendingRollLabel();
+          if (label) {
+            notifications.show({
+              title: label,
+              message: `${data.breakdown} = ${data.result}`,
+              color: 'lssBlue',
+              autoClose: 4000,
+            });
+          }
         }
       }
     });

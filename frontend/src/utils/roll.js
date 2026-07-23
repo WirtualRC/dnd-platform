@@ -3,6 +3,7 @@ import { rollDiceFormula, InvalidDiceFormula } from './dice';
 import { useRoomStore } from '../store/useRoomStore';
 import { getSocket } from '../api/socket';
 import { pushPendingRollLabel } from './pendingRollLabels';
+import { pushPendingRollEffect } from './pendingRollEffects';
 
 export function rollD20() {
   return Math.floor(Math.random() * 20) + 1;
@@ -100,6 +101,33 @@ export function rollFormulaAndNotify(label, formula) {
   } catch (e) {
     if (e instanceof InvalidDiceFormula) {
       notifications.show({ title: 'Некорректная формула урона', message: e.message, color: 'red' });
+    } else {
+      throw e;
+    }
+  }
+}
+
+// Бросок формулы, результат которой применяет побочный эффект (например,
+// лечение зельем) вместо простого тоста — тот же выбор локально/на сервере,
+// что и в rollFormulaAndNotify, но результат отдаётся вызывающему через
+// onResult(total, breakdown), а не печатается сразу. В контексте вещания
+// onResult вызывается позже, из useRoomStore, когда придёт подтверждение —
+// эффект (лечение) обязан ждать сервер по той же причине, что и сам бросок.
+export function rollFormulaForEffect(formula, onResult, onError) {
+  const ctx = broadcastContext();
+  if (ctx) {
+    pushPendingRollEffect(onResult);
+    getSocket().emit('dice_roll', { room_id: ctx.room.id, character_id: ctx.characterId, formula });
+    return;
+  }
+
+  try {
+    const { total, breakdown } = rollDiceFormula(formula);
+    onResult(total, breakdown);
+  } catch (e) {
+    if (e instanceof InvalidDiceFormula) {
+      if (onError) onError(e);
+      else notifications.show({ title: 'Некорректная формула', message: e.message, color: 'red' });
     } else {
       throw e;
     }

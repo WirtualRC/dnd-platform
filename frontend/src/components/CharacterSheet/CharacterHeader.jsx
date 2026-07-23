@@ -54,6 +54,10 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
             onChangeCurrent={(v) => set(['vitality', 'hp_current'], v)}
             onChangeMax={(v) => set(['vitality', 'hp_max'], v)}
             onChangeTemp={(v) => set(['vitality', 'hp_temp'], v)}
+            deathSaveSuccesses={vitality.death_save_successes}
+            deathSaveFailures={vitality.death_save_failures}
+            onChangeDeathSaveSuccesses={(v) => set(['vitality', 'death_save_successes'], v)}
+            onChangeDeathSaveFailures={(v) => set(['vitality', 'death_save_failures'], v)}
           />
         </Group>
       </Group>
