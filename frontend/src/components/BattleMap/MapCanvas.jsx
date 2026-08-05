@@ -137,10 +137,16 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
 
   useEffect(() => {
     if (!transformerRef.current) return;
-    const node = selectedId ? tokenRefs.current[selectedId] : null;
+    // ручки трансформации не должны цепляться к токену, который нельзя
+    // двигать (закреп, чужой токен): иначе ресайз/поворот угловой ручкой
+    // всё равно двигает узел Konva локально (Transformer работает поверх
+    // draggable), но commitTokenTransform сервер отклонит из-за _can_move_token,
+    // и токен визуально "съезжает" до перезагрузки страницы
+    const selectedToken = selectedId ? tokens[selectedId] : null;
+    const node = selectedToken && canMoveToken(selectedToken) ? tokenRefs.current[selectedId] : null;
     transformerRef.current.nodes(node ? [node] : []);
     transformerRef.current.getLayer()?.batchDraw();
-  }, [selectedId, tokens]);
+  }, [selectedId, tokens, canMoveToken]);
 
   useEffect(() => {
     if (!fogTransformerRef.current) return;
