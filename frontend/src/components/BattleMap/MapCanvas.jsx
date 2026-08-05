@@ -204,13 +204,28 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
       const blob = imageItem.getAsFile();
       if (!blob) return;
 
+      // сохраняем исходные пропорции картинки — иначе прямоугольная картинка
+      // сжимается в квадрат 60x60
+      const objectUrl = URL.createObjectURL(blob);
+      const { width, height } = await new Promise((resolve) => {
+        const img = new window.Image();
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => resolve({ width: 1, height: 1 });
+        img.src = objectUrl;
+      });
+      URL.revokeObjectURL(objectUrl);
+      const BASE_SIZE = 60;
+      const [tokenWidth, tokenHeight] = width >= height
+        ? [BASE_SIZE, BASE_SIZE * (height / width)]
+        : [BASE_SIZE * (width / height), BASE_SIZE];
+
       const formData = new FormData();
       formData.append('file', blob, 'pasted.png');
       try {
         const { url } = await api.postForm(`/rooms/${roomId}/images`, formData);
         getSocket().emit('token_add', {
           room_id: roomId, battle_map_id: mapId, image_url: `${API_ORIGIN}${url}`,
-          pos_x: lastWorldPos.current.x, pos_y: lastWorldPos.current.y, width: 60, height: 60,
+          pos_x: lastWorldPos.current.x, pos_y: lastWorldPos.current.y, width: tokenWidth, height: tokenHeight,
         });
       } catch (err) {
         console.error('Не удалось загрузить вставленную картинку', err);
