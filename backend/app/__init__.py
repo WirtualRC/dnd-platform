@@ -84,8 +84,4 @@ def create_app(config_name: str = None) -> Flask:
             }), 501
         return send_from_directory(FRONTEND_DIST, 'index.html')
 
-    with app.app_context():
-        from . import models
-        db.create_all()
-
     return app

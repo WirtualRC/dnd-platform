@@ -241,7 +241,11 @@ class DiceRoll(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     # nullable: бросок может быть не привязан к конкретному персонажу
     # (например GM кидает за NPC, или у игрока ещё нет персонажа в комнате)
-    character_id = db.Column(db.Integer, db.ForeignKey("characters.id"), nullable=True)
+    # ondelete="SET NULL": удаление персонажа не должно стирать историю
+    # бросков в комнате — лог остаётся, просто теряет привязку к персонажу.
+    character_id = db.Column(
+        db.Integer, db.ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
+    )
     formula = db.Column(db.String(50), nullable=False)  # например "2d6+3"
     result = db.Column(db.Integer, nullable=False)
     breakdown = db.Column(db.String(200), nullable=True)  # например "[4, 2] + 3"
