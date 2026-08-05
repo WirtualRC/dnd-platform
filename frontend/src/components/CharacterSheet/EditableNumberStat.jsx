@@ -6,15 +6,16 @@ import { Modal, NumberInput, UnstyledButton, Text } from '@mantine/core';
  * шапке — под текстовое значение позже встанет иконка (щит для КД и
  * т.п.), а с инпутом это не сочетается вёрсткой.
  */
-export default function EditableNumberStat({ label, value, onChange, suffix, accent }) {
+export default function EditableNumberStat({ label, value, displayValue, onChange, suffix, accent }) {
   const [opened, setOpened] = useState(false);
+  const shown = displayValue ?? value;
 
   return (
     <>
       <UnstyledButton onClick={() => setOpened(true)} style={styles.wrap} aria-label={`открыть ${label}`}>
         <Text size="10px" c="dimmed" tt="uppercase" style={{ letterSpacing: 0.4 }}>{label}</Text>
         <Text fw={700} size="lg" className="mono" style={accent ? { color: `var(--${accent})` } : undefined}>
-          {value ?? '—'}{suffix || ''}
+          {shown ?? '—'}{suffix || ''}
         </Text>
       </UnstyledButton>
 

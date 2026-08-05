@@ -290,7 +290,7 @@ describe('реальный сквозной поток против настоя
     expect(spell.aoe).toEqual({ shape: 'cone', length: 30 });
   }, 10000);
 
-  it('вдохновение циклится по клику, состояния добавляются тегами — и то и другое реально сохраняется', async () => {
+  it('вдохновение задаётся через модалку, состояния добавляются тегами — и то и другое реально сохраняется', async () => {
     const user = userEvent.setup();
     const charId = useCharacterStore.getState().characters.find(c => c.name === 'Тестовый Мэлин').id;
 
@@ -305,8 +305,12 @@ describe('реальный сквозной поток против настоя
     await waitFor(() => expect(screen.getByDisplayValue('Тестовый Мэлин')).toBeInTheDocument());
 
     const inspirationButton = screen.getByRole('button', { name: 'вдохновение: 0' });
-    await user.click(inspirationButton); // -> 1
-    expect(screen.getByRole('button', { name: 'вдохновение: 1' })).toBeInTheDocument();
+    await user.click(inspirationButton);
+    const inspirationInput = await screen.findByRole('textbox', { name: 'Вдохновение' });
+    await user.clear(inspirationInput);
+    await user.type(inspirationInput, '1');
+    await user.click(screen.getByRole('button', { name: 'Закрыть' }));
+    expect(await screen.findByRole('button', { name: 'вдохновение: 1' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'открыть состояния' }));
     const tagsInput = await screen.findByRole('combobox', { name: 'Активные состояния' });

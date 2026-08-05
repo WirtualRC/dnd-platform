@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
 import { useCharacterStore } from '../store/useCharacterStore';
 import AppHeader from '../components/AppHeader';
+import { convertLssExport } from '../utils/lssImport';
 
 const DEFAULT_NAME = 'безымянный персонаж';
 
@@ -55,6 +56,36 @@ function CardMenu({ onView, onExport, onDelete }) {
   );
 }
 
+function ImportMenu({ onPick }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function handleOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button className="ghost" onClick={() => setOpen((v) => !v)}>Импортировать из файла</button>
+      {open && (
+        <div style={styles.menu}>
+          <button className="ghost" style={styles.menuItem} onClick={() => { setOpen(false); onPick('own'); }}>
+            Наш формат
+          </button>
+          <button className="ghost" style={styles.menuItem} onClick={() => { setOpen(false); onPick('lss'); }}>
+            Формат LSS
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LibraryPage() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -62,6 +93,7 @@ export default function LibraryPage() {
 
   const { characters, isLoading, error, loadCharacters, createCharacter, deleteCharacter, exportCharacter, importCharacter } = useCharacterStore();
   const fileInputRef = useRef(null);
+  const importFormatRef = useRef('own');
 
   useEffect(() => { loadCharacters(); }, []);
 
@@ -70,11 +102,18 @@ export default function LibraryPage() {
     navigate(`/characters/${id}`);
   }
 
+  function handlePickImportFormat(format) {
+    importFormatRef.current = format;
+    fileInputRef.current?.click();
+  }
+
   async function handleImportFile(e) {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      await importCharacter(file);
+      const text = await file.text();
+      const payload = importFormatRef.current === 'lss' ? convertLssExport(text) : JSON.parse(text);
+      await importCharacter(payload);
     } catch (err) {
       alert(`Не удалось импортировать: ${err.message}`);
     }
@@ -96,7 +135,7 @@ export default function LibraryPage() {
             <p style={styles.subtitle}>{user?.username}</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="ghost" onClick={() => fileInputRef.current?.click()}>Импортировать из файла</button>
+            <ImportMenu onPick={handlePickImportFormat} />
             <input
               ref={fileInputRef}
               type="file"

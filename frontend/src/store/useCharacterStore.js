@@ -76,6 +76,16 @@ export const useCharacterStore = create((set, get) => ({
   // Обновляет локально сразу (отзывчивый UI), сохранение на сервер —
   // с дебаунсом в 800мс, чтобы не слать запрос на каждую нажатую клавишу
   updateSheetField(path, value) {
+    get().updateSheetFieldLocal(path, value);
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => { get().saveCurrent(); }, 800);
+  },
+
+  // То же самое, но без сохранения — для полей, которые сохраняются
+  // по blur (см. flushSave), а не по дебаунсу на каждое нажатие клавиши
+  // (длинные текстовые поля вроде описания снаряжения/предыстории:
+  // дебаунс там гонял запрос на сервер за каждой паузой в наборе текста)
+  updateSheetFieldLocal(path, value) {
     const current = get().current;
     if (!current) return;
     const sheet_data = structuredClone(current.sheet_data || {});
@@ -86,9 +96,14 @@ export const useCharacterStore = create((set, get) => ({
     }
     node[path[path.length - 1]] = value;
     set({ current: { ...current, sheet_data } });
+  },
 
+  // Отменяет отложенный автосейв и сохраняет немедленно — вызывается по
+  // blur текстовых полей, которые копят изменения через updateSheetFieldLocal
+  flushSave() {
     clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => { get().saveCurrent(); }, 800);
+    saveTimeout = null;
+    get().saveCurrent();
   },
 
   updateName(name) {
@@ -135,9 +150,9 @@ export const useCharacterStore = create((set, get) => ({
     URL.revokeObjectURL(url);
   },
 
-  async importCharacter(file) {
-    const text = await file.text();
-    const payload = JSON.parse(text);
+  // payload — уже разобранный объект {version, name, avatar_url, sheet_data};
+  // разбор файла (и, для чужих форматов, конвертация в этот вид) — на вызывающей стороне
+  async importCharacter(payload) {
     await api.post('/characters/import', payload);
     await get().loadCharacters();
   },

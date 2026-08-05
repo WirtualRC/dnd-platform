@@ -5,6 +5,7 @@ import RaceClassStat from './RaceClassStat';
 import HpStat from './HpStat';
 import IconUploadField from './IconUploadField';
 import CurrencyModal from './CurrencyModal';
+import { acTotal, speedTotal, hpMaxBonus } from '../../utils/dnd';
 
 const COIN_RATE_TO_GP = { cp: 0.01, sp: 0.1, ep: 0.5, gp: 1, pp: 10 };
 
@@ -43,8 +44,8 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
         </Group>
 
         <Group gap="60" wrap="wrap">
-          <EditableNumberStat label="КД" value={vitality.ac} onChange={(v) => set(['vitality', 'ac'], v)} />
-          <EditableNumberStat label="Скорость" value={vitality.speed} suffix=" фт" onChange={(v) => set(['vitality', 'speed'], v)} />
+          <EditableNumberStat label="КД" value={vitality.ac} displayValue={acTotal(sheet)} onChange={(v) => set(['vitality', 'ac'], v)} />
+          <EditableNumberStat label="Скорость" value={vitality.speed} displayValue={speedTotal(sheet)} suffix=" фт" onChange={(v) => set(['vitality', 'speed'], v)} />
           <EditableNumberStat label="Бонус влад." value={sheet.proficiency_bonus} onChange={(v) => set(['proficiency_bonus'], v)} />
         </Group>
 
@@ -56,6 +57,7 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
           <HpStat
             current={vitality.hp_current}
             max={vitality.hp_max}
+            maxBonus={hpMaxBonus(sheet)}
             temp={vitality.hp_temp}
             onChangeCurrent={(v) => set(['vitality', 'hp_current'], v)}
             onChangeMax={(v) => set(['vitality', 'hp_max'], v)}

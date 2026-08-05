@@ -60,15 +60,15 @@ export function generateActionId() {
 export const generateId = generateActionId;
 
 // Цели автобонусов от предметов/способностей — та же система ключей,
-// что уже используется для stats/saves/skills. Намеренно НЕ включает
-// ac/speed и т.п. — они пока нигде не суммируются в расчётах, а
-// показывать их как выбираемую опцию, которая молча ничего не делает,
-// было бы хуже, чем не показывать вовсе.
+// что уже используется для stats/saves/skills.
 export const MODIFIER_TARGETS = [
   ...ABILITIES.map((a) => ({ value: `ability_check:${a}`, label: `Проверка: ${ABILITY_LABELS[a]}` })),
   ...ABILITIES.map((a) => ({ value: `save:${a}`, label: `Спасбросок: ${ABILITY_LABELS[a]}` })),
   ...SKILLS.map(([key, label]) => ({ value: `skill:${key}`, label: `Навык: ${label}` })),
   { value: 'initiative', label: 'Инициатива' },
+  { value: 'ac', label: 'КД' },
+  { value: 'speed', label: 'Скорость' },
+  { value: 'hp_max', label: 'Макс. ХП' },
 ];
 
 function modifierLabel(target) {
@@ -132,6 +132,27 @@ export function initiativeTotal(sheetData) {
   const base = abilityModifier(sheetData.stats?.dex) + (sheetData.vitality?.initiative_bonus || 0);
   const mods = activeModifiers(sheetData, 'initiative');
   return { value: base + mods.bonus, advantage: mods.advantage, disadvantage: mods.disadvantage };
+}
+
+// КД/скорость/макс. ХП — базовое значение хранится напрямую в vitality
+// (не выводится из characteristик), поэтому тут просто добавляем бонусы
+// от предметов/способностей поверх него.
+export function acTotal(sheetData) {
+  const base = sheetData.vitality?.ac ?? 0;
+  return base + activeModifiers(sheetData, 'ac').bonus;
+}
+
+export function speedTotal(sheetData) {
+  const base = sheetData.vitality?.speed ?? 0;
+  return base + activeModifiers(sheetData, 'speed').bonus;
+}
+
+// Бонус к макс. ХП возвращается отдельно от базы (а не суммой), поскольку
+// HpStat редактирует/инкрементирует именно базовое значение — если бы
+// он инкрементировал уже просуммированное число, бонус запекался бы
+// в базу при каждом клике +/-.
+export function hpMaxBonus(sheetData) {
+  return activeModifiers(sheetData, 'hp_max').bonus;
 }
 
 // --- атаки: модификатор характеристики в 5e добавляется живым расчётом

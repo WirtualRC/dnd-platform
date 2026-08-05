@@ -32,7 +32,7 @@ export default function CharacterSheetPage() {
   const isViewOnly = searchParams.get('view') === '1';
   const {
     current, isLoading, error,
-    loadCharacter, updateSheetField, updateName, updateAvatarUrl, clearError,
+    loadCharacter, updateSheetField, updateSheetFieldLocal, flushSave, updateName, updateAvatarUrl, clearError,
   } = useCharacterStore();
   const room = useRoomStore((s) => s.current);
 
@@ -93,6 +93,9 @@ export default function CharacterSheetPage() {
 
   const sheet = current.sheet_data || {};
   const set = (path, value) => updateSheetField(path, value);
+  // для длинных текстовых полей (снаряжение, предыстория и т.п.) — сохранение
+  // не по дебаунсу на каждую паузу в наборе, а по blur (см. flushSave)
+  const setTextLocal = (path, value) => updateSheetFieldLocal(path, value);
 
   function openItemModal(item) { setEditingItem(item || BLANK_ITEM()); setItemModalOpen(true); }
   function saveItem(data) {
@@ -207,7 +210,8 @@ export default function CharacterSheetPage() {
                   <Textarea
                     label="Прочие способности"
                     value={sheet.text?.features || ''}
-                    onChange={(e) => set(['text', 'features'], e.target.value)}
+                    onChange={(e) => setTextLocal(['text', 'features'], e.target.value)}
+                    onBlur={flushSave}
                     autosize minRows={2}
                     placeholder="Тёмное зрение, устойчивость к яду..."
                   />
@@ -237,7 +241,8 @@ export default function CharacterSheetPage() {
                   <Textarea
                     label="Прочее снаряжение (текстом)"
                     value={sheet.text?.equipment || ''}
-                    onChange={(e) => set(['text', 'equipment'], e.target.value)}
+                    onChange={(e) => setTextLocal(['text', 'equipment'], e.target.value)}
+                    onBlur={flushSave}
                     autosize minRows={2}
                     placeholder="Факел, верёвка 15м, спальный мешок..."
                   />
@@ -316,17 +321,19 @@ export default function CharacterSheetPage() {
                   <TextInput
                     label="Предыстория (класс/архетип, например «Солдат»)"
                     value={sheet.background || ''}
-                    onChange={(e) => set(['background'], e.target.value)}
+                    onChange={(e) => setTextLocal(['background'], e.target.value)}
+                    onBlur={flushSave}
                     mb="md"
                   />
                   <SimpleGrid cols={2} spacing="md">
-                    <Textarea label="Черты характера" value={sheet.text?.traits || ''} onChange={(e) => set(['text', 'traits'], e.target.value)} autosize minRows={3} />
-                    <Textarea label="Идеалы" value={sheet.text?.ideals || ''} onChange={(e) => set(['text', 'ideals'], e.target.value)} autosize minRows={3} />
-                    <Textarea label="Привязанности" value={sheet.text?.bonds || ''} onChange={(e) => set(['text', 'bonds'], e.target.value)} autosize minRows={3} />
-                    <Textarea label="Слабости" value={sheet.text?.flaws || ''} onChange={(e) => set(['text', 'flaws'], e.target.value)} autosize minRows={3} />
+                    <Textarea label="Черты характера" value={sheet.text?.traits || ''} onChange={(e) => setTextLocal(['text', 'traits'], e.target.value)} onBlur={flushSave} autosize minRows={3} />
+                    <Textarea label="Идеалы" value={sheet.text?.ideals || ''} onChange={(e) => setTextLocal(['text', 'ideals'], e.target.value)} onBlur={flushSave} autosize minRows={3} />
+                    <Textarea label="Привязанности" value={sheet.text?.bonds || ''} onChange={(e) => setTextLocal(['text', 'bonds'], e.target.value)} onBlur={flushSave} autosize minRows={3} />
+                    <Textarea label="Слабости" value={sheet.text?.flaws || ''} onChange={(e) => setTextLocal(['text', 'flaws'], e.target.value)} onBlur={flushSave} autosize minRows={3} />
                   </SimpleGrid>
                   <Textarea
-                    label="История" value={sheet.text?.bio || ''} onChange={(e) => set(['text', 'bio'], e.target.value)}
+                    label="История" value={sheet.text?.bio || ''} onChange={(e) => setTextLocal(['text', 'bio'], e.target.value)}
+                    onBlur={flushSave}
                     autosize minRows={5} mt="md"
                   />
                 </Paper>

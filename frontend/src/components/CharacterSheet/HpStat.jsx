@@ -12,7 +12,7 @@ const POTIONS = [
 ];
 
 export default function HpStat({
-  current, max, temp, onChangeCurrent, onChangeMax, onChangeTemp,
+  current, max, maxBonus = 0, temp, onChangeCurrent, onChangeMax, onChangeTemp,
   deathSaveSuccesses, deathSaveFailures, onChangeDeathSaveSuccesses, onChangeDeathSaveFailures,
 }) {
   const [opened, setOpened] = useState(false);
@@ -20,7 +20,10 @@ export default function HpStat({
   const [editingMax, setEditingMax] = useState(false);
 
   const safeCurrent = current ?? 0;
-  const safeMax = max ?? 0;
+  // база + автобонус от предметов/способностей — редактируется/инкрементируется
+  // всегда сама база (baseMax), чтобы бонус не запекался в неё при каждом клике
+  const baseMax = max ?? 0;
+  const safeMax = baseMax + maxBonus;
   const safeTemp = temp ?? 0;
   const safeSuccesses = deathSaveSuccesses ?? 0;
   const safeFailures = deathSaveFailures ?? 0;
@@ -183,7 +186,7 @@ export default function HpStat({
           <D20Icon size={20} color="var(--lss-red)" />
         ) : (
           <Text fw={700} size="lg" className="mono" style={{ color: 'var(--health)' }}>
-            {current ?? '—'} / {max ?? '—'}{temp ? ` (+${temp})` : ''}
+            {current ?? '—'} / {safeMax}{temp ? ` (+${temp})` : ''}
           </Text>
         )}
       </UnstyledButton>
@@ -232,9 +235,9 @@ export default function HpStat({
           {editingMax && (
             <Group gap="xs" align="center">
               <Text size="sm" c="dimmed">Максимум HP</Text>
-              <UnstyledButton onClick={() => onChangeMax(Math.max(0, safeMax - 1))} style={styles.smallStep} aria-label="уменьшить максимум">−</UnstyledButton>
-              <Text className="mono" fw={600}>{safeMax}</Text>
-              <UnstyledButton onClick={() => onChangeMax(safeMax + 1)} style={styles.smallStep} aria-label="увеличить максимум">+</UnstyledButton>
+              <UnstyledButton onClick={() => onChangeMax(Math.max(0, baseMax - 1))} style={styles.smallStep} aria-label="уменьшить максимум">−</UnstyledButton>
+              <Text className="mono" fw={600}>{baseMax}{maxBonus ? ` (+${maxBonus})` : ''}</Text>
+              <UnstyledButton onClick={() => onChangeMax(baseMax + 1)} style={styles.smallStep} aria-label="увеличить максимум">+</UnstyledButton>
             </Group>
           )}
 
