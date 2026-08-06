@@ -184,6 +184,23 @@ export const useBattleMapStore = create((set, get) => ({
     ));
   },
 
+  setTokenInInitiative(roomId, tokenId, value) {
+    getSocket().emit('token_update_props', { room_id: roomId, token_id: tokenId, in_initiative: value });
+  },
+
+  setInitiativeStatsVisible(roomId, tokenId, value) {
+    getSocket().emit('token_update_props', {
+      room_id: roomId, token_id: tokenId, initiative_stats_visible_to_players: value,
+    });
+  },
+
+  // без оптимистичного локального патча: перестановка одного токена сдвигает
+  // initiative_order у остальных тоже, точный итоговый порядок дожидаемся
+  // от сервера через initiative_reordered
+  moveInitiative(roomId, tokenId, newIndex) {
+    getSocket().emit('initiative_move', { room_id: roomId, token_id: tokenId, new_index: newIndex });
+  },
+
   addFogShape(roomId, mapId, { shapeType, x, y, width, height }) {
     getSocket().emit('fog_shape_add', {
       room_id: roomId, battle_map_id: mapId, shape_type: shapeType,
@@ -275,6 +292,19 @@ export const useBattleMapStore = create((set, get) => ({
             },
           },
         };
+      });
+    });
+
+    // сервер шлёт полный итоговый порядок (список id) после каждой
+    // перестановки — проще и надёжнее пересчитать initiative_order всем
+    // разом, чем пытаться патчить только сдвинутые токены
+    socket.on('initiative_reordered', (data) => {
+      set((state) => {
+        const tokens = { ...state.tokens };
+        (data.order || []).forEach((tokenId, index) => {
+          if (tokens[tokenId]) tokens[tokenId] = { ...tokens[tokenId], initiative_order: index };
+        });
+        return { tokens };
       });
     });
 

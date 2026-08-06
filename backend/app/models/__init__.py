@@ -345,6 +345,17 @@ class Token(db.Model):
     locked = db.Column(db.Boolean, default=False, nullable=False)  # запрет двигать игрокам
     visible_to_players = db.Column(db.Boolean, default=True, nullable=False)
 
+    # Инициатива — трекер боевого порядка ходов (панель "Инициатива" на
+    # карте). По умолчанию токен в неё не входит: ГМ/владелец добавляют
+    # явно через меню токена. initiative_order — позиция в списке, целиком
+    # переприсваивается при drag-перестановке (initiative_move), без
+    # разреженных/уникальных ограничений между разными боями/картами.
+    in_initiative = db.Column(db.Boolean, default=False, nullable=False)
+    initiative_order = db.Column(db.Integer, default=0, nullable=False)
+    # ХП/КД токена в инициативе по умолчанию скрыты от игроков (видно
+    # только ГМ) — включается тем же тумблером в меню токена.
+    initiative_stats_visible_to_players = db.Column(db.Boolean, default=False, nullable=False)
+
     # Представление ("шаблон токена") — ещё не размещённая на карте
     # заготовка со своей иконкой, которая живёт в плавающей панели и не
     # исчезает при перетаскивании (перетаскивание клонирует строку в новый

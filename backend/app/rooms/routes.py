@@ -5,6 +5,7 @@ from ..extensions import db, socketio
 from ..models import Room, RoomMembership, RoomRole, BattleMap, Character, CharacterRoomLink
 from ..utils.permissions import is_gm, is_character_owner, require_character_owner_or_gm, require_gm
 from ..utils.uploads import save_uploaded_image, InvalidImageUpload
+from ..utils.dnd import effective_ac, effective_hp_max
 
 rooms_bp = Blueprint('rooms', __name__)
 
@@ -362,6 +363,11 @@ def get_battle_map(room_id, map_id):
             token.character.sheet_data if token.character else None
         )
         vitality = (live_sheet or {}).get("vitality", {})
+        # ХП/КД токена, добавленного в инициативу без явно включённой
+        # видимости, не должны утекать не-GM в сыром JSON — тот же принцип,
+        # что и у visible_to_players чуть выше, просто на уровне отдельных
+        # полей, а не всего токена целиком
+        hide_stats = not requester_is_gm and token.in_initiative and not token.initiative_stats_visible_to_players
         objects.append({
             "id": token.id,
             "character_id": token.character_id,
@@ -378,10 +384,13 @@ def get_battle_map(room_id, map_id):
             "locked": token.locked,
             "visible_to_players": token.visible_to_players,
             "is_instance": token.instance_data is not None,
-            "hp_current": vitality.get("hp_current"),
-            "hp_max": vitality.get("hp_max"),
-            "ac": vitality.get("ac"),
+            "hp_current": None if hide_stats else vitality.get("hp_current"),
+            "hp_max": None if hide_stats else effective_hp_max(live_sheet),
+            "ac": None if hide_stats else effective_ac(live_sheet),
             "conditions": (live_sheet or {}).get("conditions", []),
+            "in_initiative": token.in_initiative,
+            "initiative_order": token.initiative_order,
+            "initiative_stats_visible_to_players": token.initiative_stats_visible_to_players,
         })
 
     # геометрия тумана войны не секрет (скрыто то, что под ней, а не сама

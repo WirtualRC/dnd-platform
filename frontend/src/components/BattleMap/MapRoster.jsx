@@ -4,17 +4,21 @@ import { api } from '../../api/client';
 import { ABILITIES, ABILITY_LABELS, abilityCheckTotal, saveTotal, formatMod } from '../../utils/dnd';
 import { rollAbilityCheckInRoom } from '../../utils/roll';
 
-// Чисто производное состояние — отдельного хранилища не заводим. PC-токен
-// всегда character_id + is_instance=false (по правилу, которое мы уже
-// зафиксировали для вкладки "Персонажи"), так что фильтр уже размещённых
-// токенов и есть отряд, без всякой новой сущности.
-export default function MapRoster({ roomId, canControl }) {
+// Чисто производное состояние — отдельного хранилища не заводим. Состав и
+// порядок инициативы уже целиком в полях токена (in_initiative,
+// initiative_order), так что фильтр+сортировка уже размещённых токенов —
+// и есть список инициативы, без всякой новой сущности.
+export default function MapRoster({ roomId, canControl, canReorder }) {
   const tokens = useBattleMapStore((s) => s.tokens);
   const controlledTokenId = useBattleMapStore((s) => s.controlledTokenId);
   const setControlled = useBattleMapStore((s) => s.setControlled);
-  const roster = Object.values(tokens).filter((t) => t.character_id && !t.is_instance);
+  const moveInitiative = useBattleMapStore((s) => s.moveInitiative);
+  const roster = Object.values(tokens)
+    .filter((t) => t.in_initiative)
+    .sort((a, b) => a.initiative_order - b.initiative_order);
 
   const [statsForId, setStatsForId] = useState(null); // character_id открытой мини-карточки
+  const [dragId, setDragId] = useState(null);
   const containerRef = useRef(null);
 
   // клик вне и панели отряда, и открытой мини-карточки закрывает её — обе
@@ -33,25 +37,37 @@ export default function MapRoster({ roomId, canControl }) {
   return (
     <div ref={containerRef} style={{ display: 'contents' }}>
       <div style={styles.panel}>
-        <div style={styles.title}>Отряд</div>
+        <div style={styles.title}>Инициатива</div>
         {roster.length === 0 && (
-          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Пока никто не вышел на карту</span>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Никто не добавлен в инициативу</span>
         )}
-        {roster.map((t) => {
+        {roster.map((t, index) => {
           const controllable = canControl ? canControl(t) : false;
+          const draggable = canReorder ? canReorder(t) : false;
           const isControlled = controlledTokenId === t.id;
           return (
             <div
               key={t.id}
+              draggable={draggable}
+              onDragStart={() => setDragId(t.id)}
+              onDragOver={(e) => { if (draggable) e.preventDefault(); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragId == null || dragId === t.id) return;
+                moveInitiative(roomId, dragId, index);
+                setDragId(null);
+              }}
+              onDragEnd={() => setDragId(null)}
               style={{
                 ...styles.entry,
-                cursor: controllable ? 'pointer' : 'default',
+                cursor: draggable ? 'grab' : (controllable ? 'pointer' : 'default'),
                 background: isControlled ? 'var(--surface-2)' : 'transparent',
+                opacity: dragId === t.id ? 0.5 : 1,
                 borderRadius: 6,
                 padding: '2px 4px',
               }}
               onClick={() => {
-                if (!controllable) return;
+                if (!controllable || !t.character_id) return;
                 setControlled(t.id, t.character_id);
                 setStatsForId((cur) => (cur === t.character_id ? null : t.character_id));
               }}
@@ -59,7 +75,7 @@ export default function MapRoster({ roomId, canControl }) {
             >
               <div style={{ ...styles.avatar, backgroundImage: t.image_url ? `url(${t.image_url})` : 'none' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={styles.name}>{t.character_name}</div>
+                <div style={styles.name}>{t.character_name ?? t.label ?? 'Токен'}</div>
                 <div style={styles.stats}>
                   HP <span className="mono" style={{ color: 'var(--health)' }}>{t.hp_current ?? '?'}/{t.hp_max ?? '?'}</span> · AC {t.ac ?? '?'}
                 </div>

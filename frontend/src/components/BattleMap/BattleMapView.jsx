@@ -60,7 +60,7 @@ export default function BattleMapView({ room }) {
       />
 
       <TemplatePanel roomId={room.id} />
-      <MapRoster roomId={room.id} canControl={canMoveToken} />
+      <MapRoster roomId={room.id} canControl={canMoveToken} canReorder={canManageToken} />
       <Hotbar roomId={room.id} />
       <CombatDiceLog />
       <CursorModePanel isGm={isGm} roomId={room.id} />

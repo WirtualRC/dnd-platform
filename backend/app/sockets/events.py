@@ -7,6 +7,7 @@ from ..extensions import db, socketio
 from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character, BattleMap, FogShape
 from ..utils.dice import roll, InvalidDiceFormula
 from ..utils.permissions import is_gm, is_character_owner
+from ..utils.dnd import effective_ac, effective_hp_max
 
 
 def _is_member(room_id: int, user_id: int) -> bool:
@@ -39,9 +40,12 @@ def _serialize_placed_token(token):
         'visible_to_players': token.visible_to_players,
         'is_instance': token.instance_data is not None,
         'hp_current': vitality.get('hp_current'),
-        'hp_max': vitality.get('hp_max'),
-        'ac': vitality.get('ac'),
+        'hp_max': effective_hp_max(live_sheet),
+        'ac': effective_ac(live_sheet),
         'conditions': (live_sheet or {}).get('conditions', []),
+        'in_initiative': token.in_initiative,
+        'initiative_order': token.initiative_order,
+        'initiative_stats_visible_to_players': token.initiative_stats_visible_to_players,
     }
 
 
@@ -523,11 +527,11 @@ def handle_update_state(data):
 
     db.session.commit()
 
-    emit('token_state_changed', {
+    _emit_token_patch_filtered(room_id, 'token_state_changed', token, {
         'token_id': token.id,
         'vitality_patch': vitality_patch,
         'conditions': conditions,
-    }, room=str(room_id))
+    }, sensitive_keys={'hp_current', 'hp_max', 'hp_temp', 'ac'})
 
 
 def _can_move_token(token, room_id: int, user_id: int) -> bool:
@@ -555,7 +559,8 @@ def _can_manage_token(token, room_id: int, user_id: int) -> bool:
     _can_move_token, здесь текущее значение locked не в счёт: иначе игрок,
     закрепивший свой же токен, тут же терял бы право сам его открепить, и
     открепить смог бы только GM. Права те же, что и на создание токена:
-    GM, владелец персонажа или создатель безличного пропса."""
+    GM, владелец персонажа или создатель безличного пропса. Те же права
+    используются и для инициативы (добавить/убрать/переставить/скрыть ХП-КД)."""
     if is_gm(room_id, user_id):
         return True
     if token.character_id is not None:
@@ -563,11 +568,38 @@ def _can_manage_token(token, room_id: int, user_id: int) -> bool:
     return token.created_by_user_id == user_id
 
 
+def _emit_token_patch_filtered(room_id, event, token, payload, sensitive_keys):
+    """Рассылает payload комнате как обычно, но если у токена скрыты ХП/КД
+    в инициативе (in_initiative и не initiative_stats_visible_to_players),
+    всем кроме ГМ отправляет копию, где sensitive_keys обнулены — на
+    верхнем уровне и внутри вложенных dict-значений (например
+    vitality_patch). Обнуляем явным None, а не выбрасываем ключ: фронтенд
+    мержит такие патчи слепым спредом (см. token_state_changed/
+    token_props_updated в useBattleMapStore.js), так что просто опущенный
+    ключ оставил бы у игрока последнее известное (уже неактуальное)
+    значение вместо реального сокрытия."""
+    hide = token.in_initiative and not token.initiative_stats_visible_to_players
+    if not hide:
+        emit(event, payload, room=str(room_id))
+        return
+
+    def _scrub(value):
+        if isinstance(value, dict):
+            return {k: (None if k in sensitive_keys else v) for k, v in value.items()}
+        return value
+
+    filtered = {k: (None if k in sensitive_keys else _scrub(v)) for k, v in payload.items()}
+
+    for membership in RoomMembership.query.filter_by(room_id=room_id).all():
+        full = is_gm(room_id, membership.user_id)
+        emit(event, payload if full else filtered, room=f'user_{room_id}_{membership.user_id}')
+
+
 @socketio.on('token_update_props')
 def handle_token_update_props(data):
-    """Закреп (locked) и слой (layer) токена — отдельно от
-    token_transform_commit, т.к. право их менять не зависит от текущего
-    locked (см. _can_manage_token)."""
+    """Закреп (locked), слой (layer) и участие/видимость в инициативе —
+    отдельно от token_transform_commit, т.к. право их менять не зависит от
+    текущего locked (см. _can_manage_token)."""
     room_id = data.get('room_id')
     token_id = data.get('token_id')
 
@@ -599,13 +631,99 @@ def handle_token_update_props(data):
             return
         token.layer = layer
         patch['layer'] = layer
+    if 'in_initiative' in data:
+        in_initiative = data.get('in_initiative')
+        if not isinstance(in_initiative, bool):
+            emit('error', {'message': 'Некорректное значение участия в инициативе'})
+            return
+        token.in_initiative = in_initiative
+        if in_initiative:
+            # новый участник — в конец списка: max initiative_order среди
+            # уже стоящих в инициативе токенов этой же карты, +1
+            max_order = db.session.query(db.func.max(Token.initiative_order)).filter(
+                Token.battle_map_id == token.battle_map_id, Token.in_initiative.is_(True), Token.id != token.id,
+            ).scalar()
+            token.initiative_order = (max_order or 0) + 1
+        patch['in_initiative'] = in_initiative
+    if 'initiative_stats_visible_to_players' in data:
+        visible = data.get('initiative_stats_visible_to_players')
+        if not isinstance(visible, bool):
+            emit('error', {'message': 'Некорректное значение видимости ХП/КД'})
+            return
+        token.initiative_stats_visible_to_players = visible
+        patch['initiative_stats_visible_to_players'] = visible
 
     if not patch:
         return
 
     db.session.commit()
 
-    emit('token_props_updated', {'token_id': token.id, **patch}, room=str(room_id))
+    # смена состава/видимости инициативы должна тут же скорректировать то,
+    # что игроки видят про ХП/КД — не ждать следующего token_state_changed
+    if 'in_initiative' in patch or 'initiative_stats_visible_to_players' in patch:
+        live_sheet = token.instance_data if token.instance_data is not None else (
+            token.character.sheet_data if token.character else None
+        )
+        vitality = (live_sheet or {}).get('vitality', {})
+        patch['hp_current'] = vitality.get('hp_current')
+        patch['hp_max'] = effective_hp_max(live_sheet)
+        patch['ac'] = effective_ac(live_sheet)
+
+    _emit_token_patch_filtered(
+        room_id, 'token_props_updated', token, {'token_id': token.id, **patch},
+        sensitive_keys={'hp_current', 'hp_max', 'ac'},
+    )
+
+
+@socketio.on('initiative_move')
+def handle_initiative_move(data):
+    """Точечная перестановка одного токена в списке инициативы: клиент
+    шлёт только (token_id, new_index), сервер сам пересобирает порядок
+    остальных — так не нужно доверять клиенту чужие initiative_order и
+    не нужно валидировать целый присланный список id."""
+    room_id = data.get('room_id')
+    token_id = data.get('token_id')
+    new_index = data.get('new_index')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    token = Token.query.get(token_id)
+    if not token or token.battle_map.room_id != room_id:
+        emit('error', {'message': 'Токен не найден в этой комнате'})
+        return
+
+    if not _can_manage_token(token, room_id, current_user.id):
+        emit('error', {'message': 'Недостаточно прав переставить этот токен'})
+        return
+
+    if not isinstance(new_index, int) or isinstance(new_index, bool):
+        emit('error', {'message': 'Некорректный индекс'})
+        return
+
+    if not token.in_initiative:
+        emit('error', {'message': 'Токен не в инициативе'})
+        return
+
+    ordered = [
+        t for t in Token.query.filter_by(
+            battle_map_id=token.battle_map_id, in_initiative=True,
+        ).order_by(Token.initiative_order).all()
+        if t.id != token.id
+    ]
+    new_index = max(0, min(new_index, len(ordered)))
+    ordered.insert(new_index, token)
+
+    for index, t in enumerate(ordered):
+        t.initiative_order = index
+
+    db.session.commit()
+
+    emit('initiative_reordered', {
+        'battle_map_id': token.battle_map_id,
+        'order': [t.id for t in ordered],
+    }, room=str(room_id))
 
 
 @socketio.on('token_transform_live')

@@ -45,6 +45,7 @@ const MoreIcon = () => (
 export default function TokenActionPanel({
   x, y, locked, layer, canDelete, onToggleLock, onSetLayer, onDelete,
   conditions, onToggleCondition,
+  inInitiative, initiativeStatsVisible, onToggleInitiative, onToggleInitiativeStatsVisible,
 }) {
   const [layerMenuOpen, setLayerMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -131,6 +132,24 @@ export default function TokenActionPanel({
           >
             Состояния{conditions.length > 0 ? ` (${conditions.length})` : ''}
           </button>
+          <button
+            type="button"
+            className="ghost"
+            style={styles.layerItem}
+            onClick={() => { onToggleInitiative(); setMoreMenuOpen(false); }}
+          >
+            {inInitiative ? 'Убрать из инициативы' : 'Добавить в инициативу'}
+          </button>
+          {inInitiative && (
+            <button
+              type="button"
+              className="ghost"
+              style={{ ...styles.layerItem, ...(initiativeStatsVisible ? styles.layerItemActive : {}) }}
+              onClick={() => onToggleInitiativeStatsVisible()}
+            >
+              Показывать ХП/КД игрокам
+            </button>
+          )}
         </div>
       )}
 
