@@ -239,6 +239,40 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedId, tokens, canMoveToken, roomId, removeToken, commitTokenTransform, activeAction, clearTargetPreview, setActiveAction, activeTool, selectedFogId, isGm, removeFogShape]);
 
+  // общая логика для вставки (Ctrl+V) и drag&drop картинки из проводника —
+  // загружает файл на сервер и добавляет токен в указанной мировой точке,
+  // сохраняя исходные пропорции картинки (иначе прямоугольная сжимается в
+  // квадрат 60x60)
+  async function uploadImageAsToken(blob, worldX, worldY) {
+    const objectUrl = URL.createObjectURL(blob);
+    const { width, height } = await new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => resolve({ width: 1, height: 1 });
+      img.src = objectUrl;
+    });
+    URL.revokeObjectURL(objectUrl);
+    const BASE_SIZE = 60;
+    const [tokenWidth, tokenHeight] = width >= height
+      ? [BASE_SIZE, BASE_SIZE * (height / width)]
+      : [BASE_SIZE * (width / height), BASE_SIZE];
+
+    const formData = new FormData();
+    formData.append('file', blob, blob.name || 'image.png');
+    try {
+      const { url } = await api.postForm(`/rooms/${roomId}/images`, formData);
+      const nonce = `${Date.now()}-${Math.random()}`;
+      pendingNoncesRef.current.add(nonce);
+      getSocket().emit('token_add', {
+        room_id: roomId, battle_map_id: mapId, image_url: `${API_ORIGIN}${url}`,
+        pos_x: worldX, pos_y: worldY, width: tokenWidth, height: tokenHeight,
+        client_nonce: nonce,
+      });
+    } catch (err) {
+      console.error('Не удалось загрузить картинку', err);
+    }
+  }
+
   // Вставка картинки по Ctrl+V — в обход системы представлений, это про
   // "быстро добавить картинку", а не "сохранить переиспользуемую заготовку".
   // Если в системном буфере обмена картинки нет — это, скорее всего, Ctrl+V
@@ -266,36 +300,7 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
 
       const blob = imageItem.getAsFile();
       if (!blob) return;
-
-      // сохраняем исходные пропорции картинки — иначе прямоугольная картинка
-      // сжимается в квадрат 60x60
-      const objectUrl = URL.createObjectURL(blob);
-      const { width, height } = await new Promise((resolve) => {
-        const img = new window.Image();
-        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-        img.onerror = () => resolve({ width: 1, height: 1 });
-        img.src = objectUrl;
-      });
-      URL.revokeObjectURL(objectUrl);
-      const BASE_SIZE = 60;
-      const [tokenWidth, tokenHeight] = width >= height
-        ? [BASE_SIZE, BASE_SIZE * (height / width)]
-        : [BASE_SIZE * (width / height), BASE_SIZE];
-
-      const formData = new FormData();
-      formData.append('file', blob, 'pasted.png');
-      try {
-        const { url } = await api.postForm(`/rooms/${roomId}/images`, formData);
-        const nonce = `${Date.now()}-${Math.random()}`;
-        pendingNoncesRef.current.add(nonce);
-        getSocket().emit('token_add', {
-          room_id: roomId, battle_map_id: mapId, image_url: `${API_ORIGIN}${url}`,
-          pos_x: lastWorldPos.current.x, pos_y: lastWorldPos.current.y, width: tokenWidth, height: tokenHeight,
-          client_nonce: nonce,
-        });
-      } catch (err) {
-        console.error('Не удалось загрузить вставленную картинку', err);
-      }
+      uploadImageAsToken(blob, lastWorldPos.current.x, lastWorldPos.current.y);
     }
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
@@ -549,9 +554,20 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
 
   function handleDrop(e) {
     e.preventDefault();
+    const { x, y } = toWorld(e.clientX, e.clientY);
+
+    // драг картинки прямо из проводника ОС — files заполнен, dataTransfer
+    // с template-id тут пуст (тот кладётся вручную из TemplatePanel)
+    const files = [...(e.dataTransfer.files || [])];
+    const imageFile = files.find((f) => f.type.startsWith('image/'));
+    if (imageFile) {
+      if (!mapId) return;
+      uploadImageAsToken(imageFile, x, y);
+      return;
+    }
+
     const templateId = e.dataTransfer.getData('text/template-id');
     if (!templateId) return;
-    const { x, y } = toWorld(e.clientX, e.clientY);
     onDropTemplate(parseInt(templateId, 10), x, y);
   }
 

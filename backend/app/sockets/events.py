@@ -803,12 +803,12 @@ def handle_token_transform_commit(data):
 
     # ресайз — оба поля опциональны, но если переданы, должны быть в
     # разумных пределах: не меньше 10px (не превратить токен в невидимую
-    # точку) и не больше 2000px (не растянуть на всю карту случайным
+    # точку) и не больше 5000px (не растянуть на всю карту случайным
     # драгом угла на порядок больше, чем размер самой карты)
     for field_name, value in (('width', width), ('height', height)):
         if value is None:
             continue
-        if not isinstance(value, (int, float)) or not (10 <= value <= 2000):
+        if not isinstance(value, (int, float)) or not (10 <= value <= 5000):
             emit('error', {'message': f'Некорректный размер токена ({field_name})'})
             return
     if width is not None:
