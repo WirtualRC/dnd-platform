@@ -20,6 +20,13 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
   const fogTransformerRef = useRef(null);
   const fogShapeRefs = useRef({});
   const lastWorldPos = useRef({ x: 0, y: 0 }); // для вставки картинки — не требует ре-рендера
+  // undo (Ctrl+Z) — стек последних СВОИХ действий (перемещение/ресайз/
+  // вставка), только в памяти вкладки, без redo; ограничен по размеру,
+  // чтобы не расти бесконечно за долгую сессию
+  const undoStackRef = useRef([]);
+  const dragBeforeRef = useRef({}); // { [tokenId]: {pos_x,pos_y} } — снимок на onDragStart
+  const copiedTokenIdRef = useRef(null); // id токена, скопированного по Ctrl+C — свой буфер, не системный
+  const pendingNoncesRef = useRef(new Set()); // client_nonce токенов, чей token_added ещё не пришёл
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [selectedId, setSelectedId] = useState(null);
   // экранная проекция трансформации стейджа (пан/зум) — нужна только чтобы
@@ -157,8 +164,37 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
     fogTransformerRef.current.getLayer()?.batchDraw();
   }, [selectedFogId, fogShapes]);
 
-  // Delete/Backspace — удаление, Escape — отмена прицеливания. Право
-  // удалять — то же самое право двигать токен (сервер перепроверит сам).
+  // ограничиваем размер стека, чтобы не расти бесконечно за долгую сессию
+  const UNDO_STACK_LIMIT = 50;
+  function pushUndo(entry) {
+    const stack = undoStackRef.current;
+    stack.push(entry);
+    if (stack.length > UNDO_STACK_LIMIT) stack.shift();
+  }
+
+  // отменяет последнюю запись в undoStackRef — перемещение/ресайз
+  // откатываются обратно в предыдущее состояние тем же commitTokenTransform,
+  // которым были применены; добавленный (вставленный/скопированный) токен
+  // просто удаляется. Если токен успел исчезнуть/измениться у кого-то
+  // другого — молча пропускаем: undo только своих действий, без гарантий
+  // согласованности с чужими правками (см. план фичи).
+  function performUndo() {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    const currentTokens = useBattleMapStore.getState().tokens;
+    if (!currentTokens[entry.tokenId]) return;
+    if (entry.type === 'transform') {
+      commitTokenTransform(roomId, entry.tokenId, entry.before);
+    } else if (entry.type === 'add') {
+      removeToken(roomId, entry.tokenId);
+    }
+  }
+
+  // Delete/Backspace — удаление, Escape — отмена прицеливания, Ctrl+Z —
+  // отмена своего последнего перемещения/ресайза/вставки, Ctrl+C — копирует
+  // выбранный токен в локальный (не системный) буфер для Ctrl+V (см.
+  // handlePaste ниже — вставка токена происходит там же, где вставка
+  // картинки, это одно и то же нажатие).
   useEffect(() => {
     function handleKeyDown(e) {
       const active = document.activeElement;
@@ -170,6 +206,18 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
         return;
       }
       if (isEditingField) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        performUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (selectedId && tokens[selectedId] && canMoveToken(tokens[selectedId])) {
+          copiedTokenIdRef.current = selectedId;
+        }
+        return;
+      }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
 
       if (activeTool === 'fog' && selectedFogId) {
@@ -189,10 +237,13 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, tokens, canMoveToken, roomId, removeToken, activeAction, clearTargetPreview, setActiveAction, activeTool, selectedFogId, isGm, removeFogShape]);
+  }, [selectedId, tokens, canMoveToken, roomId, removeToken, commitTokenTransform, activeAction, clearTargetPreview, setActiveAction, activeTool, selectedFogId, isGm, removeFogShape]);
 
   // Вставка картинки по Ctrl+V — в обход системы представлений, это про
   // "быстро добавить картинку", а не "сохранить переиспользуемую заготовку".
+  // Если в системном буфере обмена картинки нет — это, скорее всего, Ctrl+V
+  // после Ctrl+C по токену на карте (свой буфер, см. copiedTokenIdRef в
+  // обработчике клавиш выше), а не вставка из ОС — пробуем этот путь.
   useEffect(() => {
     async function handlePaste(e) {
       const active = document.activeElement;
@@ -201,7 +252,17 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
 
       const items = [...(e.clipboardData?.items || [])];
       const imageItem = items.find((item) => item.type.startsWith('image/'));
-      if (!imageItem) return;
+      if (!imageItem) {
+        const sourceTokenId = copiedTokenIdRef.current;
+        if (!sourceTokenId) return;
+        const nonce = `${Date.now()}-${Math.random()}`;
+        pendingNoncesRef.current.add(nonce);
+        getSocket().emit('token_duplicate', {
+          room_id: roomId, source_token_id: sourceTokenId,
+          pos_x: lastWorldPos.current.x, pos_y: lastWorldPos.current.y, client_nonce: nonce,
+        });
+        return;
+      }
 
       const blob = imageItem.getAsFile();
       if (!blob) return;
@@ -225,9 +286,12 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
       formData.append('file', blob, 'pasted.png');
       try {
         const { url } = await api.postForm(`/rooms/${roomId}/images`, formData);
+        const nonce = `${Date.now()}-${Math.random()}`;
+        pendingNoncesRef.current.add(nonce);
         getSocket().emit('token_add', {
           room_id: roomId, battle_map_id: mapId, image_url: `${API_ORIGIN}${url}`,
           pos_x: lastWorldPos.current.x, pos_y: lastWorldPos.current.y, width: tokenWidth, height: tokenHeight,
+          client_nonce: nonce,
         });
       } catch (err) {
         console.error('Не удалось загрузить вставленную картинку', err);
@@ -236,6 +300,22 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
   }, [roomId, mapId]);
+
+  // отдельный от стора слушатель token_added — только чтобы поймать эхо
+  // СВОЕГО добавления (по client_nonce) и завести на него запись в undo;
+  // сокет допускает несколько подписчиков на одно событие, стор слушает
+  // тот же token_added независимо для обновления tokens.
+  useEffect(() => {
+    function handleTokenAdded(data) {
+      if (data.client_nonce && pendingNoncesRef.current.has(data.client_nonce)) {
+        pendingNoncesRef.current.delete(data.client_nonce);
+        pushUndo({ type: 'add', tokenId: data.id });
+      }
+    }
+    const socket = getSocket();
+    socket.on('token_added', handleTokenAdded);
+    return () => socket.off('token_added', handleTokenAdded);
+  }, []);
 
   // синхронизирует стейт с фактической трансформацией стейджа — та обычно
   // двигается императивно (Konva drag, wheel-зум) в обход React ради 60fps,
@@ -500,9 +580,22 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
         shapeRef={(node) => { if (node) tokenRefs.current[token.id] = node; }}
         canMove={canMoveToken(token) && !activeAction && activeTool === 'pan'}
         onSelect={() => handleTokenClick(token)}
+        onDragStart={(id) => { dragBeforeRef.current[id] = { pos_x: token.pos_x, pos_y: token.pos_y }; }}
         onDragMove={(id, x, y) => moveTokenLive(roomId, id, x, y)}
-        onDragEnd={(id, x, y) => commitTokenTransform(roomId, id, { pos_x: x, pos_y: y })}
+        onDragEnd={(id, x, y) => {
+          const before = dragBeforeRef.current[id] || { pos_x: token.pos_x, pos_y: token.pos_y };
+          pushUndo({ type: 'transform', tokenId: id, before });
+          commitTokenTransform(roomId, id, { pos_x: x, pos_y: y });
+        }}
         onTransformEnd={(id, node) => {
+          pushUndo({
+            type: 'transform',
+            tokenId: id,
+            before: {
+              pos_x: token.pos_x, pos_y: token.pos_y,
+              rotation: token.rotation, width: token.width || 50, height: token.height || 50,
+            },
+          });
           const scaleX = node.scaleX();
           const scaleY = node.scaleY();
           node.scaleX(1);

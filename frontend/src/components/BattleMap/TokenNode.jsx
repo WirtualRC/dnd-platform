@@ -82,7 +82,7 @@ function ConditionBadge({ label, x }) {
   );
 }
 
-export default function TokenNode({ token, canMove, shapeRef, onSelect, onDragMove, onDragEnd, onTransformEnd }) {
+export default function TokenNode({ token, canMove, shapeRef, onSelect, onDragStart, onDragMove, onDragEnd, onTransformEnd }) {
   const image = useTokenImage(token.image_url);
   const color = token.is_instance ? '#b5453a' : '#c9822f';
   const w = token.width || 50;
@@ -107,6 +107,7 @@ export default function TokenNode({ token, canMove, shapeRef, onSelect, onDragMo
       draggable={canMove}
       onClick={onSelect}
       onTap={onSelect}
+      onDragStart={() => onDragStart(token.id)}
       onDragMove={(e) => onDragMove(token.id, e.target.x(), e.target.y())}
       onDragEnd={(e) => onDragEnd(token.id, e.target.x(), e.target.y())}
       onTransformEnd={(e) => onTransformEnd(token.id, e.target)}

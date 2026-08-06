@@ -239,7 +239,7 @@ export default function CharacterSheetPage() {
               <Tabs.Panel value="equipment" pt="md">
                 <Paper withBorder p="md" mb="md">
                   <Textarea
-                    label="Прочее снаряжение (текстом)"
+                    label="Прочее снаряжение"
                     value={sheet.text?.equipment || ''}
                     onChange={(e) => setTextLocal(['text', 'equipment'], e.target.value)}
                     onBlur={flushSave}

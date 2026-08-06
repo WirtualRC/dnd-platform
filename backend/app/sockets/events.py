@@ -256,6 +256,7 @@ def handle_token_add(data):
     battle_map_id = data.get('battle_map_id')
     character_id = data.get('character_id')
     as_instance = bool(data.get('as_instance', False))
+    client_nonce = data.get('client_nonce')
 
     if not room_id or not _is_member(room_id, current_user.id):
         emit('error', {'message': 'Вы не участник этой комнаты'})
@@ -297,7 +298,14 @@ def handle_token_add(data):
     db.session.add(token)
     db.session.commit()
 
-    emit('token_added', _serialize_placed_token(token), room=str(room_id))
+    # client_nonce — сквозной идентификатор, который клиент присылает сам
+    # (например, при вставке картинки Ctrl+V), чтобы потом опознать в общей
+    # рассылке token_added именно свой запрос и узнать id для undo. Никак
+    # не используется сервером, просто эхом возвращается отправителю.
+    payload = _serialize_placed_token(token)
+    if client_nonce is not None:
+        payload['client_nonce'] = client_nonce
+    emit('token_added', payload, room=str(room_id))
 
 
 @socketio.on('template_create')
@@ -845,6 +853,78 @@ def handle_token_remove(data):
     db.session.commit()
 
     emit('token_removed', {'token_id': token_id}, room=str(room_id))
+
+
+@socketio.on('token_duplicate')
+def handle_token_duplicate(data):
+    """Копирование уже размещённого токена (Ctrl+C/Ctrl+V на карте) — в
+    отличие от token_add, здесь клиент не присылает никаких игровых данных,
+    только id токена-источника и точку вставки: сервер сам читает
+    авторитетное текущее состояние источника и решает, что скопировать.
+
+    Логика листа персонажа зависит от того, ЧТО именно копируется:
+    - у источника уже есть instance_data (это саммон/NPC-инстанс, возможно
+      побитый в бою) — копия получает ТОЧНО ТУ ЖЕ instance_data, включая
+      текущие HP/состояния, а не свежий лист с полным здоровьем;
+    - источник — обычный токен 1:1 с персонажем (living-связь, sheet_data
+      не снят) — копия становится независимым саммоном со снимком листа
+      персонажа на момент копирования, тем же принципом, что as_instance=True
+      в token_add и place_template для kind='npc';
+    - у источника нет character_id (пропс/картинка) — копия тоже без листа.
+    """
+    room_id = data.get('room_id')
+    source_token_id = data.get('source_token_id')
+    client_nonce = data.get('client_nonce')
+
+    if not room_id or not _is_member(room_id, current_user.id):
+        emit('error', {'message': 'Вы не участник этой комнаты'})
+        return
+
+    source = Token.query.get(source_token_id)
+    if not source or source.template or source.battle_map.room_id != room_id:
+        emit('error', {'message': 'Токен не найден в этой комнате'})
+        return
+
+    if not _can_move_token(source, room_id, current_user.id):
+        emit('error', {'message': 'Недостаточно прав скопировать этот токен'})
+        return
+
+    if source.instance_data is not None:
+        instance_data = dict(source.instance_data)
+    elif source.character_id is not None:
+        instance_data = dict(source.character.sheet_data)
+    else:
+        instance_data = None
+
+    battle_map = source.battle_map
+    pos_x = data.get('pos_x', source.pos_x)
+    pos_y = data.get('pos_y', source.pos_y)
+    if not isinstance(pos_x, (int, float)) or not isinstance(pos_y, (int, float)):
+        pos_x, pos_y = source.pos_x, source.pos_y
+
+    token = Token(
+        battle_map_id=source.battle_map_id,
+        character_id=source.character_id,
+        instance_data=instance_data,
+        created_by_user_id=current_user.id,
+        label=source.label,
+        image_url=source.image_url,
+        pos_x=max(0, min(float(pos_x), battle_map.width)),
+        pos_y=max(0, min(float(pos_y), battle_map.height)),
+        width=source.width,
+        height=source.height,
+        rotation=source.rotation,
+        layer=source.layer,
+        locked=False,  # копия никогда не наследует закреп оригинала
+        visible_to_players=source.visible_to_players,
+    )
+    db.session.add(token)
+    db.session.commit()
+
+    payload = _serialize_placed_token(token)
+    if client_nonce is not None:
+        payload['client_nonce'] = client_nonce
+    emit('token_added', payload, room=str(room_id))
 
 
 def _serialize_fog_shape(shape):
