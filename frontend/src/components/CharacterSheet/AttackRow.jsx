@@ -12,7 +12,10 @@ export default function AttackRow({ attack, sheet, onEdit }) {
         <Text size="sm" fw={600}>{attack.name || 'Без названия'}</Text>
       </UnstyledButton>
 
-      <UnstyledButton onClick={() => rollAndNotify(`Атака: ${attack.name}`, attackMod)} aria-label={`бросок атаки ${attack.name}`}>
+      <UnstyledButton
+        onClick={(e) => rollAndNotify(`Атака: ${attack.name}`, attackMod, { advantage: e.shiftKey, disadvantage: e.ctrlKey })}
+        aria-label={`бросок атаки ${attack.name}`}
+      >
         <Badge variant="light" className="mono" style={{ cursor: 'pointer', minWidth: 42 }}>{formatMod(attackMod)}</Badge>
       </UnstyledButton>
 

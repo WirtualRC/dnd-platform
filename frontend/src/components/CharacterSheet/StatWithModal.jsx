@@ -28,7 +28,7 @@ export default function StatWithModal({ label, base, manualBonus, onChangeManual
       </UnstyledButton>
 
       {rollable ? (
-        <UnstyledButton onClick={() => rollAndNotify(label, total)}>
+        <UnstyledButton onClick={(e) => rollAndNotify(label, total, { advantage: e.shiftKey, disadvantage: e.ctrlKey })}>
           <Badge variant="light" className="mono" style={{ cursor: 'pointer', minWidth: 34 }}>{display}</Badge>
         </UnstyledButton>
       ) : (

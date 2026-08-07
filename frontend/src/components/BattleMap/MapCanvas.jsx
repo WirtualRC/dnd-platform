@@ -526,7 +526,7 @@ export default function MapCanvas({ roomId, isGm, canMoveToken, canManageToken, 
     // костей (контрзаклинание и т.п.), rollFormula пуст и бросать нечего.
     if (!action.rollFormula) return;
     pushPendingRollLabel(action.data.name);
-    useRoomStore.getState().rollDice(action.rollFormula, action.characterId);
+    useRoomStore.getState().rollDice(action.rollFormula, action.characterId, action.data.name);
   }
 
   function handleStageClick(e) {

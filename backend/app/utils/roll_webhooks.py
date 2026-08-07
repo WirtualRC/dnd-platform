@@ -45,11 +45,15 @@ def _absolute_avatar_url(avatar_url):
     return avatar_url
 
 
-def dispatch_roll_webhooks(character_id, label, formula, breakdown, total):
+def dispatch_roll_webhooks(character_id, label, formula, breakdown, total, natural=None):
     """Рассылает результат броска во все Discord-вебхуки, включённые для
     этого персонажа (см. CharacterRollPresetLink). Каждая отправка уходит
     в отдельный background task — недоступный/медленный вебхук у одного
-    пресета не должен задерживать вызывающий хендлер/роут."""
+    пресета не должен задерживать вызывающий хендлер/роут.
+
+    natural — натуральное значение d20 для чистого броска проверки/спасброска/
+    атаки (см. _extract_natural_d20 в sockets/events.py), None для всего
+    остального (урон и т.п.) — используется только для крит-эмодзи 🔥/🩸."""
     if not character_id:
         return
     character = Character.query.get(character_id)
@@ -70,4 +74,5 @@ def dispatch_roll_webhooks(character_id, label, formula, breakdown, total):
             formula=formula,
             breakdown=breakdown,
             result=total,
+            natural=natural,
         )

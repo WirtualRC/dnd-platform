@@ -109,7 +109,19 @@ def _build_roll_lines(formula, breakdown, total):
         return None
 
 
-def send_discord_roll(webhook_url, color, *, character_name, character_avatar_url, label, formula, breakdown, result):
+def _crit_wrap(text, natural):
+    """Оборачивает строку эмодзи по натуральному значению d20: 🔥 на 20
+    (критический успех), 🩸 на 1 (критическая неудача). Не про исход броска
+    в целом (общий total может быть каким угодно из-за модификаторов) —
+    ровно про саму кость, как и всегда для крита в 5e."""
+    if natural == 20:
+        return f"🔥 {text} 🔥"
+    if natural == 1:
+        return f"🩸 {text} 🩸"
+    return text
+
+
+def send_discord_roll(webhook_url, color, *, character_name, character_avatar_url, label, formula, breakdown, result, natural=None):
     """Бросок уже решён и записан в DiceRoll — эта функция только отдаёт
     его в Discord, поэтому не бросает исключений наружу (вызывается в
     background task сокет-хендлера, отправлять там больше некому)."""
@@ -129,7 +141,7 @@ def send_discord_roll(webhook_url, color, *, character_name, character_avatar_ur
         roll_text = (breakdown or formula).replace(',', ', ')
     embed = {
         "title": character_name or "Бросок",
-        "description": f"**{label or formula} — {result}**\n\n{roll_text}",
+        "description": f"**{_crit_wrap(f'{label or formula} — {result}', natural)}**\n\n{roll_text}",
         "color": _color_to_int(color),
     }
     if footer_text:

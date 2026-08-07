@@ -122,9 +122,14 @@ function CharacterStatsPopover({ roomId, characterId, characterName, onClose }) 
 
   // карточка нарочно не закрывается после броска — часто хочется кинуть
   // несколько проверок подряд, закрывает только крестик или клик мимо
-  function handleRoll(kind, abilityKey, total) {
-    const label = `${characterName}: ${kind}: ${ABILITY_LABELS[abilityKey]}`;
-    rollAbilityCheckInRoom(roomId, characterId, label, total.value, total);
+  function handleRoll(kind, abilityKey, total, shiftKey, ctrlKey) {
+    const abilityLabel = `${kind}: ${ABILITY_LABELS[abilityKey]}`;
+    const label = `${characterName}: ${abilityLabel}`;
+    rollAbilityCheckInRoom(roomId, characterId, label, total.value, {
+      ...total,
+      advantage: total.advantage || shiftKey,
+      disadvantage: total.disadvantage || ctrlKey,
+    }, abilityLabel);
   }
 
   return (
@@ -147,7 +152,7 @@ function CharacterStatsPopover({ roomId, characterId, characterName, onClose }) 
                 <button
                   key={key}
                   style={styles.abilityBtn}
-                  onClick={() => handleRoll('Проверка', key, check)}
+                  onClick={(e) => handleRoll('Проверка', key, check, e.shiftKey, e.ctrlKey)}
                   aria-label={`бросок: проверка ${ABILITY_LABELS[key]}`}
                 >
                   <span style={styles.abilityLabel}>{ABILITY_LABELS[key].slice(0, 3)}</span>
@@ -165,7 +170,7 @@ function CharacterStatsPopover({ roomId, characterId, characterName, onClose }) 
                 <button
                   key={key}
                   style={styles.abilityBtn}
-                  onClick={() => handleRoll('Спасбросок', key, save)}
+                  onClick={(e) => handleRoll('Спасбросок', key, save, e.shiftKey, e.ctrlKey)}
                   aria-label={`бросок: спасбросок ${ABILITY_LABELS[key]}`}
                 >
                   <span style={styles.abilityLabel}>{ABILITY_LABELS[key].slice(0, 3)}</span>

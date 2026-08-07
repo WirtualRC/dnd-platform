@@ -44,7 +44,12 @@ export default function SkillRow({
         {/* <Text size="sm">{displayLabel}</Text> */}
         <Text size={stretch ? 'sm' : 'xs'} c={stretch ? undefined : 'dimmed'}>{displayLabel}</Text>
       </UnstyledButton>
-      <UnstyledButton onClick={() => rollAndNotify(a11yLabel, total, { advantage, disadvantage })}>
+      <UnstyledButton
+        onClick={(e) => rollAndNotify(a11yLabel, total, {
+          advantage: advantage || e.shiftKey,
+          disadvantage: disadvantage || e.ctrlKey,
+        })}
+      >
         <Badge variant="light" className="mono" style={{ cursor: 'pointer', minWidth: 42 }}>
           {formatMod(total)}
         </Badge>

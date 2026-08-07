@@ -57,7 +57,14 @@ export default function AbilityModal({ opened, onClose, label, abilityKey, sheet
         />
       </Group>
 
-      <Button fullWidth variant="light" mb="md" onClick={() => rollAndNotify(`Проверка: ${label}`, check.value, check)}>
+      <Button
+        fullWidth variant="light" mb="md"
+        onClick={(e) => rollAndNotify(`Проверка: ${label}`, check.value, {
+          ...check,
+          advantage: check.advantage || e.shiftKey,
+          disadvantage: check.disadvantage || e.ctrlKey,
+        })}
+      >
         Бросить проверку ({formatMod(check.value)})
       </Button>
 
@@ -74,7 +81,14 @@ export default function AbilityModal({ opened, onClose, label, abilityKey, sheet
           />
           <Text size="sm">Спасбросок</Text>
         </Group>
-        <Button variant="subtle" size="xs" onClick={() => rollAndNotify(`Спасбросок: ${label}`, save.value, save)}>
+        <Button
+          variant="subtle" size="xs"
+          onClick={(e) => rollAndNotify(`Спасбросок: ${label}`, save.value, {
+            ...save,
+            advantage: save.advantage || e.shiftKey,
+            disadvantage: save.disadvantage || e.ctrlKey,
+          })}
+        >
           {formatMod(save.value)}
         </Button>
       </Group>

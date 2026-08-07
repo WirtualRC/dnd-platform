@@ -15,6 +15,19 @@ def _is_member(room_id: int, user_id: int) -> bool:
     return RoomMembership.query.filter_by(room_id=room_id, user_id=user_id).first() is not None
 
 
+def _extract_natural_d20(result):
+    """Натуральное значение d20 для чистого броска "1d20±N" (проверка,
+    спасбросок, атака) — используется для крит-эмодзи (🔥/🩸). Формулы
+    урона/прочие броски с несколькими или другими костями не подходят под
+    этот шаблон и намеренно возвращают None (крит на них не подсвечивается)."""
+    if len(result.dice_rolls) != 1:
+        return None
+    sides, rolls = result.dice_rolls[0]
+    if sides != 20 or len(rolls) != 1:
+        return None
+    return rolls[0]
+
+
 def _serialize_placed_token(token):
     """Общая форма для token_added — используется и обычным token_add, и
     place_template (клонирование представления на карту), чтобы фронтенд
@@ -150,6 +163,9 @@ def handle_dice_roll(data):
         # выбранным работает так же, как для обычного броска
         discord_breakdown = f"d20[{chosen}] {sign} {abs(bonus)}"
         discord_label = f"{label} ({roll_type})" if label and roll_type != 'обычный бросок' else label
+        # натуральное значение кости — то самое, что решает крит на d20-броске
+        # (проверка/спасбросок/атака), см. _extract_natural_d20
+        natural = chosen
     else:
         formula = (data.get('formula') or '').strip()
         try:
@@ -162,6 +178,7 @@ def handle_dice_roll(data):
         final_breakdown = result.breakdown
         discord_breakdown = final_breakdown
         discord_label = label
+        natural = _extract_natural_d20(result)
 
     dice_roll = DiceRoll(
         room_id=room_id,
@@ -183,10 +200,11 @@ def handle_dice_roll(data):
         'result': final_total,
         'breakdown': final_breakdown,
         'label': label,
+        'natural': natural,
         'created_at': dice_roll.created_at.isoformat(),
     }, room=str(room_id))
 
-    dispatch_roll_webhooks(character_id, discord_label, final_formula, discord_breakdown, final_total)
+    dispatch_roll_webhooks(character_id, discord_label, final_formula, discord_breakdown, final_total, natural)
 
 
 @socketio.on('mode_change')

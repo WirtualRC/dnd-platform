@@ -6,6 +6,7 @@ import { api } from '../api/client';
 import { getSocket } from '../api/socket';
 import { pushPendingRollLabel } from './pendingRollLabels';
 import { pushPendingRollEffect } from './pendingRollEffects';
+import { wrapCritLabel } from './critLabel';
 
 export function rollD20() {
   return Math.floor(Math.random() * 20) + 1;
@@ -23,10 +24,10 @@ function broadcastContext() {
 // того, открыт ли сейчас персонаж в какой-то комнате: Discord-уведомления
 // не должны зависеть от факта трансляции. Fire-and-forget — ошибка сети
 // тут не должна мешать обычному локальному броску/тосту.
-function notifyLocalRollWebhooks(label, formula, result, breakdown) {
+function notifyLocalRollWebhooks(label, formula, result, breakdown, natural) {
   const characterId = useCharacterStore.getState().current?.id;
   if (!characterId) return;
-  api.post(`/characters/${characterId}/roll-presets/notify`, { label, formula, result, breakdown }).catch(() => {});
+  api.post(`/characters/${characterId}/roll-presets/notify`, { label, formula, result, breakdown, natural }).catch(() => {});
 }
 
 // Пока лист персонажа живёт вне контекста комнаты, ролл локальный
@@ -72,7 +73,7 @@ export function rollAndNotify(label, bonus, opts = {}) {
   const total = roll + bonus;
   const sign = bonus >= 0 ? '+' : '';
   notifications.show({
-    title: label,
+    title: wrapCritLabel(label, total, roll),
     message: `${detail} ${sign}${bonus} = ${total}`,
     color: roll === 20 ? 'green' : roll === 1 ? 'red' : 'lssBlue',
     autoClose: 4000,
@@ -85,7 +86,7 @@ export function rollAndNotify(label, bonus, opts = {}) {
   const bonusSign = bonus >= 0 ? '+' : '-';
   const discordBreakdown = `d20[${roll}]${bonus !== 0 ? ` ${bonusSign} ${Math.abs(bonus)}` : ''}`;
   const discordLabel = rollTypeLabel ? `${label} (${rollTypeLabel})` : label;
-  notifyLocalRollWebhooks(discordLabel, `1d20${sign}${bonus}`, total, discordBreakdown);
+  notifyLocalRollWebhooks(discordLabel, `1d20${sign}${bonus}`, total, discordBreakdown, roll);
 }
 
 // Бросок за персонажа в конкретной комнате, без оглядки на
@@ -93,9 +94,14 @@ export function rollAndNotify(label, bonus, opts = {}) {
 // на боевой карте, где кликнуть можно на любого контролируемого
 // персонажа, а не только на того, чей лист сейчас открыт на вкладке.
 // Бросок всегда решает сервер (см. комментарий в rollAndNotify).
-export function rollAbilityCheckInRoom(roomId, characterId, label, bonus, opts = {}) {
+// label — для тоста и лога (с именем персонажа, т.к. в ростере брoсает
+// GM/игрок за разных персонажей вперемешку); discordLabel — то, что уйдёт
+// в Discord-эмбед (по умолчанию совпадает с label), где имя персонажа уже
+// показано отдельно как заголовок эмбеда (см. send_discord_roll) и
+// повторять его в тексте брoска не нужно.
+export function rollAbilityCheckInRoom(roomId, characterId, label, bonus, opts = {}, discordLabel = label) {
   pushPendingRollLabel(label);
-  const payload = { room_id: roomId, character_id: characterId, label };
+  const payload = { room_id: roomId, character_id: characterId, label: discordLabel };
   if (opts.advantage || opts.disadvantage) {
     payload.bonus = bonus;
     payload.advantage = !!opts.advantage;

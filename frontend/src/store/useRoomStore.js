@@ -5,6 +5,7 @@ import { getSocket } from '../api/socket';
 import { useAuthStore } from './useAuthStore';
 import { shiftPendingRollLabel } from '../utils/pendingRollLabels';
 import { shiftPendingRollEffect } from '../utils/pendingRollEffects';
+import { wrapCritLabel } from '../utils/critLabel';
 
 let listenersAttached = false;
 
@@ -76,10 +77,10 @@ export const useRoomStore = create((set, get) => ({
     getSocket().emit('mode_change', { room_id: room.id, mode });
   },
 
-  rollDice(formula, characterId) {
+  rollDice(formula, characterId, label) {
     const room = get().current;
     if (!room) return;
-    getSocket().emit('dice_roll', { room_id: room.id, formula, character_id: characterId || null });
+    getSocket().emit('dice_roll', { room_id: room.id, formula, character_id: characterId || null, label });
   },
 
   clearError() { set({ error: null }); },
@@ -111,7 +112,7 @@ export const useRoomStore = create((set, get) => ({
           const label = shiftPendingRollLabel();
           if (label) {
             notifications.show({
-              title: label,
+              title: wrapCritLabel(label, data.result, data.natural),
               message: `${data.breakdown} = ${data.result}`,
               color: 'lssBlue',
               autoClose: 4000,

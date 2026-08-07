@@ -538,5 +538,6 @@ def notify_roll_presets(char_id):
     if not isinstance(formula, str) or not isinstance(result, int):
         return jsonify({"error": "formula and result are required"}), 400
 
-    dispatch_roll_webhooks(char_id, data.get('label'), formula, data.get('breakdown'), result)
+    natural = data.get('natural')
+    dispatch_roll_webhooks(char_id, data.get('label'), formula, data.get('breakdown'), result, natural if isinstance(natural, int) else None)
     return jsonify({"message": "ok"}), 200

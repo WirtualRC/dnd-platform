@@ -34,7 +34,13 @@ export default function AbilityBlock({ label, abilityKey, sheet, onChangeAbility
       <Group gap="lg" mb="xs" wrap="wrap">
         <Group gap={8.6} wrap="nowrap">
           <Text size="xs" c="dimmed">Проверка</Text>
-          <UnstyledButton onClick={() => rollAndNotify(`Проверка: ${label}`, check.value, check)}>
+          <UnstyledButton
+            onClick={(e) => rollAndNotify(`Проверка: ${label}`, check.value, {
+              ...check,
+              advantage: check.advantage || e.shiftKey,
+              disadvantage: check.disadvantage || e.ctrlKey,
+            })}
+          >
             <Badge variant="light" className="mono" style={{ cursor: 'pointer', minWidth: 42 }}>
               {formatMod(check.value)}
             </Badge>
