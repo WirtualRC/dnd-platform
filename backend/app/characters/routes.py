@@ -1,12 +1,22 @@
+import re
+
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
+from requests import RequestException
 
 from ..extensions import db, socketio
-from ..models import Character, RoomMembership, CharacterRoomLink, Token, BattleMap
+from ..models import (
+    Character, RoomMembership, CharacterRoomLink, Token, BattleMap,
+    RollWebhookPreset, CharacterRollPresetLink,
+)
 from ..utils.permissions import is_gm
 from ..utils.uploads import save_uploaded_image, InvalidImageUpload
+from ..utils.discord_webhook import is_discord_webhook_url, send_discord_test
+from ..utils.roll_webhooks import dispatch_roll_webhooks
 
 characters_bp = Blueprint('characters', __name__)
+
+_HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 
 
 def _character_linked_to_room(character_id: int, room_id: int) -> bool:
@@ -303,3 +313,230 @@ def import_character():
         "message": "Character imported successfully",
         "character": {"id": new_char.id, "name": new_char.name},
     }), 201
+
+
+def _serialize_preset(preset: RollWebhookPreset, enabled: bool) -> dict:
+    return {
+        "id": preset.id,
+        "type": preset.type,
+        "name": preset.name,
+        "color": preset.color,
+        "webhook_url": preset.webhook_url,
+        "enabled": enabled,
+    }
+
+
+def _validate_preset_fields(data: dict):
+    """Общая валидация полей пресета для создания/редактирования.
+    Возвращает (name, color, webhook_url) или бросает ValueError с текстом
+    ошибки для клиента."""
+    name = (data.get('name') or '').strip()
+    if not name or len(name) > 100:
+        raise ValueError("Название пресета обязательно и не длиннее 100 символов")
+
+    color = data.get('color') or ''
+    if not _HEX_COLOR_RE.match(color):
+        raise ValueError("Цвет должен быть в формате #RRGGBB")
+
+    webhook_url = data.get('webhook_url') or ''
+    if not is_discord_webhook_url(webhook_url):
+        raise ValueError("URL вебхука должен быть настоящей ссылкой на Discord webhook")
+
+    return name, color, webhook_url
+
+
+@characters_bp.route('/<int:char_id>/roll-presets', methods=['GET'])
+@login_required
+def list_roll_presets(char_id):
+    """Пресеты — личные для пользователя, а не персонажа (см. модель), но
+    список отдаём в контексте конкретного персонажа: вместе с каждым
+    пресетом отдаём, включён ли он для ЭТОГО персонажа, чтобы фронт мог
+    сразу отрисовать галочки."""
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    presets = RollWebhookPreset.query.filter_by(owner_id=current_user.id).all()
+    links = {
+        link.preset_id: link.enabled
+        for link in CharacterRollPresetLink.query.filter_by(character_id=char_id).all()
+    }
+    return jsonify({
+        "presets": [_serialize_preset(p, links.get(p.id, False)) for p in presets]
+    }), 200
+
+
+@characters_bp.route('/<int:char_id>/roll-presets', methods=['POST'])
+@login_required
+def create_roll_preset(char_id):
+    """Создаёт новый пресет и сразу включает его для этого персонажа —
+    остальным персонажам пользователя пресет виден в списке, но выключен,
+    пока не включат его сами (см. toggle_roll_preset)."""
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    try:
+        name, color, webhook_url = _validate_preset_fields(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    preset = RollWebhookPreset(
+        owner_id=current_user.id,
+        type='discord',
+        name=name,
+        color=color,
+        webhook_url=webhook_url,
+    )
+    db.session.add(preset)
+    db.session.flush()  # нужен preset.id для ссылки на него из link
+
+    link = CharacterRollPresetLink(character_id=char_id, preset_id=preset.id, enabled=True)
+    db.session.add(link)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error creating roll preset: {e}")
+        return jsonify({"error": "Failed to create preset"}), 500
+
+    return jsonify({"preset": _serialize_preset(preset, True)}), 201
+
+
+@characters_bp.route('/roll-presets/<int:preset_id>', methods=['PUT'])
+@login_required
+def update_roll_preset(preset_id):
+    """Правка общих полей пресета — затрагивает всех персонажей,
+    у которых он подключён (это тот же URL/цвет/имя, не копия)."""
+    preset = RollWebhookPreset.query.get_or_404(preset_id)
+    if preset.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    try:
+        name, color, webhook_url = _validate_preset_fields(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    preset.name = name
+    preset.color = color
+    preset.webhook_url = webhook_url
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error updating roll preset: {e}")
+        return jsonify({"error": "Failed to update preset"}), 500
+
+    return jsonify({"preset": _serialize_preset(preset, True)}), 200
+
+
+@characters_bp.route('/roll-presets/<int:preset_id>', methods=['DELETE'])
+@login_required
+def delete_roll_preset(preset_id):
+    """Удаляет пресет целиком — вместе со всеми подписками на него
+    (cascade на CharacterRollPresetLink), у всех персонажей владельца."""
+    preset = RollWebhookPreset.query.get_or_404(preset_id)
+    if preset.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    try:
+        db.session.delete(preset)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error deleting roll preset: {e}")
+        return jsonify({"error": "Failed to delete preset"}), 500
+
+    return jsonify({"message": "Preset deleted successfully"}), 200
+
+
+@characters_bp.route('/<int:char_id>/roll-presets/<int:preset_id>/toggle', methods=['PUT'])
+@login_required
+def toggle_roll_preset(char_id, preset_id):
+    """Включает/выключает конкретный пресет для конкретного персонажа —
+    единственное, что в этой фиче реально привязано к персонажу, а не
+    к пользователю целиком."""
+    character = Character.query.get_or_404(char_id)
+    preset = RollWebhookPreset.query.get_or_404(preset_id)
+    if character.owner_id != current_user.id or preset.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json()
+    if not data or 'enabled' not in data:
+        return jsonify({"error": "enabled is required"}), 400
+
+    link = CharacterRollPresetLink.query.filter_by(character_id=char_id, preset_id=preset_id).first()
+    if link is None:
+        link = CharacterRollPresetLink(character_id=char_id, preset_id=preset_id, enabled=bool(data['enabled']))
+        db.session.add(link)
+    else:
+        link.enabled = bool(data['enabled'])
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error toggling roll preset: {e}")
+        return jsonify({"error": "Failed to toggle preset"}), 500
+
+    return jsonify({"preset": _serialize_preset(preset, link.enabled)}), 200
+
+
+@characters_bp.route('/roll-presets/test', methods=['POST'])
+@login_required
+def test_roll_preset():
+    """Кнопка "Проверить" в форме пресета — тестирует URL/цвет прямо из
+    черновика формы, без необходимости сначала сохранять пресет."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    webhook_url = data.get('webhook_url') or ''
+    if not is_discord_webhook_url(webhook_url):
+        return jsonify({"error": "URL вебхука должен быть настоящей ссылкой на Discord webhook"}), 400
+
+    color = data.get('color') or '#F44336'
+    try:
+        send_discord_test(webhook_url, color, character_name=current_user.username)
+    except RequestException as e:
+        current_app.logger.warning(f"Discord webhook test failed: {e}")
+        return jsonify({"error": "Не удалось отправить сообщение — проверьте URL"}), 400
+
+    return jsonify({"message": "Тестовое сообщение отправлено"}), 200
+
+
+@characters_bp.route('/<int:char_id>/roll-presets/notify', methods=['POST'])
+@login_required
+def notify_roll_presets(char_id):
+    """Уведомляет включённые для этого персонажа Discord-пресеты о броске,
+    сделанном на листе персонажа БЕЗ трансляции в комнату (лист открыт не
+    внутри активной комнаты, либо комната не подгружена в этой вкладке) —
+    в отличие от dice_roll по сокету, здесь нет ни room_id, ни проверки
+    членства в комнате, ни записи в DiceRoll: только рассылка вебхуков,
+    чтобы Discord-уведомления не зависели от того, сейчас ли персонаж
+    "в бою"/транслируется в какую-то комнату."""
+    character = Character.query.get_or_404(char_id)
+    if character.owner_id != current_user.id:
+        return jsonify({"error": "Permission denied"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    formula = data.get('formula')
+    result = data.get('result')
+    if not isinstance(formula, str) or not isinstance(result, int):
+        return jsonify({"error": "formula and result are required"}), 400
+
+    dispatch_roll_webhooks(char_id, data.get('label'), formula, data.get('breakdown'), result)
+    return jsonify({"message": "ok"}), 200

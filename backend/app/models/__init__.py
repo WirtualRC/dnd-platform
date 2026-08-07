@@ -54,6 +54,9 @@ class User(UserMixin, db.Model):
     characters = db.relationship(
         "Character", back_populates="owner", cascade="all, delete-orphan"
     )
+    roll_webhook_presets = db.relationship(
+        "RollWebhookPreset", back_populates="owner", cascade="all, delete-orphan"
+    )
 
     def set_password(self, raw_password: str) -> None:
         self.password_hash = generate_password_hash(raw_password)
@@ -202,6 +205,9 @@ class Character(db.Model):
     )
     # удобный доступ character.rooms -> список Room без похода через room_links
     rooms = association_proxy("room_links", "room")
+    roll_preset_links = db.relationship(
+        "CharacterRollPresetLink", back_populates="character", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Character {self.name}>"
@@ -227,6 +233,53 @@ class CharacterRoomLink(db.Model):
 
     def __repr__(self):
         return f"<CharacterRoomLink char={self.character_id} room={self.room_id}>"
+
+
+class RollWebhookPreset(db.Model):
+    """Пресет вебхука для рассылки результатов бросков (пока только Discord).
+    Принадлежит пользователю, а не персонажу — один и тот же пресет можно
+    подключить сразу нескольким своим персонажам (см. CharacterRollPresetLink),
+    вместо того чтобы заводить отдельный URL на каждого."""
+
+    __tablename__ = "roll_webhook_presets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type = db.Column(db.String(20), nullable=False, default="discord")
+    name = db.Column(db.String(100), nullable=False)
+    color = db.Column(db.String(7), nullable=False, default="#F44336")
+    webhook_url = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    owner = db.relationship("User", back_populates="roll_webhook_presets")
+    character_links = db.relationship(
+        "CharacterRollPresetLink", back_populates="preset", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self):
+        return f"<RollWebhookPreset {self.name} ({self.type})>"
+
+
+class CharacterRollPresetLink(db.Model):
+    """Подписка конкретного персонажа на пресет вебхука — своя же для
+    каждой пары персонаж/пресет галочка enabled, чтобы один пресет можно
+    было включить для одного персонажа игрока и выключить для другого."""
+
+    __tablename__ = "character_roll_preset_links"
+    __table_args__ = (
+        db.UniqueConstraint("character_id", "preset_id", name="uq_character_roll_preset"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    character_id = db.Column(db.Integer, db.ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
+    preset_id = db.Column(db.Integer, db.ForeignKey("roll_webhook_presets.id", ondelete="CASCADE"), nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+
+    character = db.relationship("Character", back_populates="roll_preset_links")
+    preset = db.relationship("RollWebhookPreset", back_populates="character_links")
+
+    def __repr__(self):
+        return f"<CharacterRollPresetLink char={self.character_id} preset={self.preset_id} enabled={self.enabled}>"
 
 
 class DiceRoll(db.Model):

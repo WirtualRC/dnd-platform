@@ -8,7 +8,6 @@ import uuid
 from pathlib import Path
 
 from flask import current_app
-from werkzeug.utils import secure_filename
 from PIL import Image, UnidentifiedImageError
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
@@ -42,11 +41,19 @@ def save_uploaded_image(file, subdir: str) -> str:
     except (UnidentifiedImageError, OSError):
         raise InvalidImageUpload("Invalid image file")
 
-    # secure_filename режет путь/расширение до безопасного, но само по себе
-    # не даёт непредсказуемости — оригинальное имя всё ещё узнаваемо и
-    # потенциально угадываемо, поэтому префиксуем uuid4
-    safe_original = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4().hex}_{safe_original}"
+    # Оригинальное имя нигде дальше не используется (никогда не показывается
+    # пользователю — только сегмент URL), поэтому от него берём только уже
+    # провалидированное расширение, а не пропускаем всё имя через
+    # werkzeug.secure_filename: у него filename.encode("ascii", "ignore")
+    # молча вырезает любые не-ASCII символы (например кириллицу) целиком,
+    # а последующий .strip("._") срезает то, что осталось от точки перед
+    # расширением — из "Скриншот.webp" получался буквально "webp" без точки.
+    # Без точки Flask не может определить Content-Type по расширению при
+    # отдаче файла (см. uploaded_file в app/__init__.py), картинка отдаётся
+    # как application/octet-stream, и, например, Discord отказывается
+    # показывать такой URL как превью в эмбеде.
+    ext = file.filename.rsplit('.', 1)[1].lower()
+    unique_filename = f"{uuid.uuid4().hex}.{ext}"
 
     upload_dir = Path(current_app.config['UPLOAD_DIR']) / subdir
     upload_dir.mkdir(parents=True, exist_ok=True)

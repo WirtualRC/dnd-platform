@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Paper, Avatar, TextInput, Modal, Group, Stack, UnstyledButton, Text } from '@mantine/core';
+import { Paper, Avatar, TextInput, Modal, Group, Stack, UnstyledButton, Text, Menu } from '@mantine/core';
 import EditableNumberStat from './EditableNumberStat';
 import RaceClassStat from './RaceClassStat';
 import HpStat from './HpStat';
 import IconUploadField from './IconUploadField';
 import CurrencyModal from './CurrencyModal';
+import RollPresetsModal from './RollPresetsModal';
 import { acTotal, speedTotal, hpMaxBonus } from '../../utils/dnd';
 
 const COIN_RATE_TO_GP = { cp: 0.01, sp: 0.1, ep: 0.5, gp: 1, pp: 10 };
@@ -12,6 +13,7 @@ const COIN_RATE_TO_GP = { cp: 0.01, sp: 0.1, ep: 0.5, gp: 1, pp: 10 };
 export default function CharacterHeader({ current, sheet, updateName, updateAvatarUrl, set }) {
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
+  const [rollPresetsModalOpen, setRollPresetsModalOpen] = useState(false);
   const vitality = sheet.vitality || {};
   const coins = sheet.coins || {};
   const totalGold = Object.entries(COIN_RATE_TO_GP).reduce((sum, [key, rate]) => sum + (coins[key] || 0) * rate, 0);
@@ -20,9 +22,17 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
     <Paper withBorder p="md" mb="md">
       <Group align="center" gap="lg" wrap="wrap" justify="space-between">
         <Group align="center" gap="lg" wrap="wrap">
-          <UnstyledButton onClick={() => setAvatarModalOpen(true)} aria-label="открыть аватар">
-            <Avatar src={current.avatar_url || undefined} size={72} radius="xl" />
-          </UnstyledButton>
+          <Menu position="bottom-start">
+            <Menu.Target>
+              <UnstyledButton aria-label="меню аватара">
+                <Avatar src={current.avatar_url || undefined} size={72} radius="xl" />
+              </UnstyledButton>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item onClick={() => setAvatarModalOpen(true)}>Сменить аватарку</Menu.Item>
+              <Menu.Item onClick={() => setRollPresetsModalOpen(true)}>Настройки бросков</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
 
           <Stack gap={2} align="flex-start">
             <TextInput
@@ -79,6 +89,12 @@ export default function CharacterHeader({ current, sheet, updateName, updateAvat
         onClose={() => setCurrencyModalOpen(false)}
         coins={coins}
         onChange={(next) => set(['coins'], next)}
+      />
+
+      <RollPresetsModal
+        opened={rollPresetsModalOpen}
+        onClose={() => setRollPresetsModalOpen(false)}
+        characterId={current.id}
       />
     </Paper>
   );

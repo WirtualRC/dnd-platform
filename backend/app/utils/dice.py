@@ -38,7 +38,10 @@ class DiceRollResult:
         for sides, rolls in self.dice_rolls:
             sign = '-' if rolls and rolls[0] < 0 else '+'
             abs_rolls = [abs(r) for r in rolls]
-            parts.append(f"{sign} d{sides}[{', '.join(map(str, abs_rolls))}]")
+            # количество костей в префиксе только когда их больше одной
+            # ("2d6[5,6]"), для одной кости — как раньше, без "1d20[15]"
+            count_prefix = str(len(abs_rolls)) if len(abs_rolls) > 1 else ''
+            parts.append(f"{sign} {count_prefix}d{sides}[{','.join(map(str, abs_rolls))}]")
         if self.modifier:
             parts.append(f"{'+' if self.modifier > 0 else '-'} {abs(self.modifier)}")
         text = ' '.join(parts)

@@ -1,6 +1,8 @@
 import { notifications } from '@mantine/notifications';
 import { rollDiceFormula, InvalidDiceFormula } from './dice';
 import { useRoomStore } from '../store/useRoomStore';
+import { useCharacterStore } from '../store/useCharacterStore';
+import { api } from '../api/client';
 import { getSocket } from '../api/socket';
 import { pushPendingRollLabel } from './pendingRollLabels';
 import { pushPendingRollEffect } from './pendingRollEffects';
@@ -14,6 +16,19 @@ function broadcastContext() {
   return current && broadcastCharacterId ? { room: current, characterId: broadcastCharacterId } : null;
 }
 
+// Уведомление Discord-пресетов для ЛОКАЛЬНОГО броска (без трансляции в
+// комнату — см. broadcastContext) — этот путь не идёт через сокет вовсе,
+// поэтому серверный dispatch_roll_webhooks в handle_dice_roll его не
+// увидит. Отправляем результат отдельным REST-запросом, независимо от
+// того, открыт ли сейчас персонаж в какой-то комнате: Discord-уведомления
+// не должны зависеть от факта трансляции. Fire-and-forget — ошибка сети
+// тут не должна мешать обычному локальному броску/тосту.
+function notifyLocalRollWebhooks(label, formula, result, breakdown) {
+  const characterId = useCharacterStore.getState().current?.id;
+  if (!characterId) return;
+  api.post(`/characters/${characterId}/roll-presets/notify`, { label, formula, result, breakdown }).catch(() => {});
+}
+
 // Пока лист персонажа живёт вне контекста комнаты, ролл локальный
 // (мгновенный Math.random(), без похода на сервер). Но если персонаж сейчас
 // активен в какой-то комнате (см. store/useRoomStore.broadcastCharacterId),
@@ -25,7 +40,7 @@ export function rollAndNotify(label, bonus, opts = {}) {
   const ctx = broadcastContext();
   if (ctx) {
     pushPendingRollLabel(label);
-    const payload = { room_id: ctx.room.id, character_id: ctx.characterId };
+    const payload = { room_id: ctx.room.id, character_id: ctx.characterId, label };
     if (opts.advantage || opts.disadvantage) {
       payload.bonus = bonus;
       payload.advantage = !!opts.advantage;
@@ -38,15 +53,17 @@ export function rollAndNotify(label, bonus, opts = {}) {
   }
 
   const { advantage, disadvantage } = opts;
-  let roll, detail;
+  let roll, detail, rollTypeLabel = null;
   if (advantage && !disadvantage) {
     const r1 = rollD20(), r2 = rollD20();
     roll = Math.max(r1, r2);
     detail = `d20 (${r1}, ${r2} — преимущество)`;
+    rollTypeLabel = 'преимущество';
   } else if (disadvantage && !advantage) {
     const r1 = rollD20(), r2 = rollD20();
     roll = Math.min(r1, r2);
     detail = `d20 (${r1}, ${r2} — помеха)`;
+    rollTypeLabel = 'помеха';
   } else {
     roll = rollD20();
     detail = `d20 (${roll})`;
@@ -60,6 +77,15 @@ export function rollAndNotify(label, bonus, opts = {}) {
     color: roll === 20 ? 'green' : roll === 1 ? 'red' : 'lssBlue',
     autoClose: 4000,
   });
+  // тост выше нарочно показывает оба d20 при преимуществе/помехе (см. detail) —
+  // полезный контекст в игре. Но для Discord нужна breakdown-строка в
+  // квадратных скобках с ТОЛЬКО выбранным значением (см. _build_roll_lines
+  // на бэкенде — сумма должна сходиться с total), поэтому здесь отдельная
+  // версия, а "преимущество"/"помеха" переносим в подпись, а не в разбивку
+  const bonusSign = bonus >= 0 ? '+' : '-';
+  const discordBreakdown = `d20[${roll}]${bonus !== 0 ? ` ${bonusSign} ${Math.abs(bonus)}` : ''}`;
+  const discordLabel = rollTypeLabel ? `${label} (${rollTypeLabel})` : label;
+  notifyLocalRollWebhooks(discordLabel, `1d20${sign}${bonus}`, total, discordBreakdown);
 }
 
 // Бросок за персонажа в конкретной комнате, без оглядки на
@@ -69,7 +95,7 @@ export function rollAndNotify(label, bonus, opts = {}) {
 // Бросок всегда решает сервер (см. комментарий в rollAndNotify).
 export function rollAbilityCheckInRoom(roomId, characterId, label, bonus, opts = {}) {
   pushPendingRollLabel(label);
-  const payload = { room_id: roomId, character_id: characterId };
+  const payload = { room_id: roomId, character_id: characterId, label };
   if (opts.advantage || opts.disadvantage) {
     payload.bonus = bonus;
     payload.advantage = !!opts.advantage;
@@ -86,7 +112,7 @@ export function rollFormulaAndNotify(label, formula) {
   const ctx = broadcastContext();
   if (ctx) {
     pushPendingRollLabel(label);
-    getSocket().emit('dice_roll', { room_id: ctx.room.id, character_id: ctx.characterId, formula });
+    getSocket().emit('dice_roll', { room_id: ctx.room.id, character_id: ctx.characterId, formula, label });
     return;
   }
 
@@ -98,6 +124,7 @@ export function rollFormulaAndNotify(label, formula) {
       color: 'lssBlue',
       autoClose: 4000,
     });
+    notifyLocalRollWebhooks(label, formula, total, breakdown);
   } catch (e) {
     if (e instanceof InvalidDiceFormula) {
       notifications.show({ title: 'Некорректная формула урона', message: e.message, color: 'red' });

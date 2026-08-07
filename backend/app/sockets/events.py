@@ -8,6 +8,7 @@ from ..models import RoomMembership, DiceRoll, Room, RoomMode, Token, Character,
 from ..utils.dice import roll, InvalidDiceFormula
 from ..utils.permissions import is_gm, is_character_owner
 from ..utils.dnd import effective_ac, effective_hp_max
+from ..utils.roll_webhooks import dispatch_roll_webhooks
 
 
 def _is_member(room_id: int, user_id: int) -> bool:
@@ -103,6 +104,7 @@ def handle_dice_roll(data):
     character_id = data.get('character_id')
     advantage = bool(data.get('advantage'))
     disadvantage = bool(data.get('disadvantage'))
+    label = data.get('label')
 
     if not room_id or not _is_member(room_id, current_user.id):
         emit('error', {'message': 'Вы не участник этой комнаты'})
@@ -129,17 +131,25 @@ def handle_dice_roll(data):
 
         r1, r2 = random.randint(1, 20), random.randint(1, 20)
         if advantage and not disadvantage:
-            chosen, label = max(r1, r2), 'преимущество'
+            chosen, roll_type = max(r1, r2), 'преимущество'
         elif disadvantage and not advantage:
-            chosen, label = min(r1, r2), 'помеха'
+            chosen, roll_type = min(r1, r2), 'помеха'
         else:
             # оба флага разом — по правилам 5e гасят друг друга, обычный бросок
-            chosen, label = r1, 'обычный бросок'
+            chosen, roll_type = r1, 'обычный бросок'
 
         sign = '+' if bonus >= 0 else '-'
         final_formula = f"1d20{sign}{abs(bonus)}"
         final_total = chosen + bonus
-        final_breakdown = f"d20[{r1}, {r2}] ({label}) {sign} {abs(bonus)}"
+        # для тоста/лога комнаты — показываем оба брошенных d20 и то, что
+        # был выбор (важный контекст при преимуществе/помехе)
+        final_breakdown = f"d20[{r1}, {r2}] ({roll_type}) {sign} {abs(bonus)}"
+        # для Discord — отдельная версия только с выбранным значением: формат
+        # там строится по formula+breakdown (см. _build_roll_lines), и с
+        # обоими d20 в скобках сумма не сойдётся с final_total, а с одним
+        # выбранным работает так же, как для обычного броска
+        discord_breakdown = f"d20[{chosen}] {sign} {abs(bonus)}"
+        discord_label = f"{label} ({roll_type})" if label and roll_type != 'обычный бросок' else label
     else:
         formula = (data.get('formula') or '').strip()
         try:
@@ -150,6 +160,8 @@ def handle_dice_roll(data):
         final_formula = result.formula
         final_total = result.total
         final_breakdown = result.breakdown
+        discord_breakdown = final_breakdown
+        discord_label = label
 
     dice_roll = DiceRoll(
         room_id=room_id,
@@ -170,8 +182,11 @@ def handle_dice_roll(data):
         'formula': final_formula,
         'result': final_total,
         'breakdown': final_breakdown,
+        'label': label,
         'created_at': dice_roll.created_at.isoformat(),
     }, room=str(room_id))
+
+    dispatch_roll_webhooks(character_id, discord_label, final_formula, discord_breakdown, final_total)
 
 
 @socketio.on('mode_change')
@@ -1169,8 +1184,11 @@ def handle_spell_cast(data):
                 'id': dice_roll.id, 'user': current_user.username, 'character_id': character_id,
                 'character_name': character.name,
                 'formula': result.formula, 'result': result.total, 'breakdown': result.breakdown,
+                'label': action.get('name'),
                 'created_at': dice_roll.created_at.isoformat(),
             }, room=str(room_id))
+
+            dispatch_roll_webhooks(character_id, action.get('name'), result.formula, result.breakdown, result.total)
 
     emit('spell_cast_effect', payload, room=str(room_id))
 

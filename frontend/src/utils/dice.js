@@ -55,7 +55,11 @@ export function rollDiceFormula(formula) {
   const breakdown = diceRolls
     .map(({ sides, rolls }) => {
       const sign = rolls[0] < 0 ? '-' : '+';
-      return `${sign} d${sides}[${rolls.map((r) => Math.abs(r)).join(', ')}]`;
+      // количество костей в префиксе только когда их больше одной
+      // ("2d6[5,6]"), для одной кости — как раньше, без "1d20[15]"
+      // (см. ту же логику в backend/app/utils/dice.py)
+      const countPrefix = rolls.length > 1 ? String(rolls.length) : '';
+      return `${sign} ${countPrefix}d${sides}[${rolls.map((r) => Math.abs(r)).join(',')}]`;
     })
     .concat(flatModifier ? [`${flatModifier >= 0 ? '+' : '-'} ${Math.abs(flatModifier)}`] : [])
     .join(' ')
